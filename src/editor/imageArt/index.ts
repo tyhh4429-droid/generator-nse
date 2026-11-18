@@ -81,8 +81,12 @@ export const rasterizeImageArt = (
     if (!sourceContext) return emptyImageArt()
 
     const sourceImage = sourceContext.getImageData(0, 0, source.width, source.height)
-    const bounds = getForegroundBounds(sourceImage, threshold, foreground)
-    if (!bounds) return emptyImageArt()
+    const bounds = {
+      x: 0,
+      y: 0,
+      width: source.width,
+      height: source.height,
+    }
 
     let width = Math.min(MAX_IMAGE_ART_GRID_SIZE, Math.max(1, Math.floor(artWidth / anchorWidth)))
     let height = Math.max(1, Math.round((width * bounds.height) / bounds.width))
