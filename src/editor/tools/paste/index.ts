@@ -1,0 +1,699 @@
+import type { Tool } from '..'
+import type { BpmObject } from '../../../chart/bpm'
+import type { CameraEventObject } from '../../../chart/events/camera'
+import type { StageMaskEventObject } from '../../../chart/events/stage/mask'
+import type { StagePivotEventObject } from '../../../chart/events/stage/pivot'
+import type { StageStyleEventObject } from '../../../chart/events/stage/style'
+import type { StageTransformEventObject } from '../../../chart/events/stage/transform.ts'
+import type { GroupId } from '../../../chart/groups'
+import type { Chart } from '../../../chart/index.ts'
+import type { FlickDirection, NoteObject } from '../../../chart/note'
+import type { StageId } from '../../../chart/stages'
+import type { TimeScaleObject } from '../../../chart/timeScale'
+import { clipboardEntry, updateClipboard } from '../../../clipboard/index.ts'
+import { pushState, state } from '../../../history'
+import { checkDynamicStages, isDynamicStages } from '../../../history/dynamicStages'
+import { defaultGroupId, groups } from '../../../history/groups'
+import { defaultStageId, stages } from '../../../history/stages'
+import { i18n } from '../../../i18n'
+import type { Entity } from '../../../state/entities'
+import { toBpmEntity, type BpmEntity } from '../../../state/entities/bpm'
+import {
+    toCameraEventJointEntity,
+    type CameraEventJointEntity,
+} from '../../../state/entities/events/joints/camera'
+import {
+    toStageMaskEventJointEntity,
+    type StageMaskEventJointEntity,
+} from '../../../state/entities/events/joints/stage/mask'
+import {
+    toStagePivotEventJointEntity,
+    type StagePivotEventJointEntity,
+} from '../../../state/entities/events/joints/stage/pivot'
+import {
+    toStageStyleEventJointEntity,
+    type StageStyleEventJointEntity,
+} from '../../../state/entities/events/joints/stage/style'
+import {
+    toStageTransformEventJointEntity,
+    type StageTransformEventJointEntity,
+} from '../../../state/entities/events/joints/stage/transform.ts'
+import { createSlideId } from '../../../state/entities/slides'
+import { toNoteEntity, type NoteEntity } from '../../../state/entities/slides/note'
+import { toTimeScaleEntity, type TimeScaleEntity } from '../../../state/entities/timeScale'
+import { addBpm, removeBpm } from '../../../state/mutations/bpm'
+import { addCameraEventJoint } from '../../../state/mutations/events/camera'
+import { addStageMaskEventJoint } from '../../../state/mutations/events/stage/mask'
+import { addStagePivotEventJoint } from '../../../state/mutations/events/stage/pivot'
+import { addStageStyleEventJoint } from '../../../state/mutations/events/stage/style'
+import { addStageTransformEventJoint } from '../../../state/mutations/events/stage/transform.ts'
+import { addNote } from '../../../state/mutations/slides/note'
+import { addTimeScale, removeTimeScale } from '../../../state/mutations/timeScale'
+import { getInStoreGrid } from '../../../state/store/grid'
+import { createTransaction, type Transaction } from '../../../state/transaction'
+import { interpolate } from '../../../utils/interpolate'
+import { align } from '../../../utils/math'
+import { isAsciiArtGroup } from '../../asciiArt'
+import { notify } from '../../notification'
+import { view, xToLane, yToBeatOffset } from '../../view'
+import PasteSidebar from './PasteSidebar.vue'
+
+let active:
+    | {
+          lane: number
+          beat: number
+          chart: Chart
+          entities: Entity[]
+          preserveGroupIds: ReadonlySet<GroupId>
+      }
+    | undefined
+
+export const paste: Tool = {
+    title: () => i18n.value.tools.paste.title,
+    sidebar: PasteSidebar,
+
+    hover(x, y, modifiers) {
+        void updateClipboard()
+
+        const data = clipboardEntry.value?.data
+        if (!data) return
+
+        const { entities, preserveGroupIds } = cachedTransform(data.chart)
+        if (!entities.length) return
+
+        const lane = xToLane(x)
+        const beatOffset = yToBeatOffset(y, data.beat)
+
+        const creating: Entity[] = []
+        for (const entity of entities) {
+            const beat = entity.beat + beatOffset
+            if (beat < 0) continue
+
+            const result = creates[entity.type]?.(
+                entities,
+                entity as never,
+                data.lane,
+                lane,
+                beat,
+                modifiers.shift,
+                preserveGroupIds,
+            )
+            if (!result) continue
+
+            creating.push(result)
+        }
+
+        view.entities = {
+            hovered: [],
+            creating,
+        }
+    },
+
+    async tap(x, y, modifiers) {
+        const data = clipboardEntry.value?.data
+        if (!data) return
+
+        const preview = transform(data.chart)
+        if (!preview.entities.length) return
+
+        if (
+            preview.entities.some(
+                (entity) =>
+                    entity.type === 'cameraEventJoint' ||
+                    entity.type === 'stageMaskEventJoint' ||
+                    entity.type === 'stagePivotEventJoint' ||
+                    entity.type === 'stageStyleEventJoint' ||
+                    entity.type === 'stageTransformEventJoint',
+            )
+        ) {
+            await checkDynamicStages()
+        }
+
+        const transaction = createTransaction(state.value)
+        const { entities, preserveGroupIds } = transform(
+            data.chart,
+            createPastedAsciiArtGroups(transaction, data.chart),
+        )
+
+        const lane = xToLane(x)
+        const beatOffset = yToBeatOffset(y, data.beat)
+
+        const selectedEntities: Entity[] = []
+        for (const entity of entities) {
+            const beat = entity.beat + beatOffset
+            if (beat < 0) continue
+
+            const result = pastes[entity.type]?.(
+                transaction,
+                entities,
+                entity as never,
+                data.lane,
+                lane,
+                beat,
+                modifiers.shift,
+                preserveGroupIds,
+            )
+            if (!result) continue
+
+            selectedEntities.push(...result)
+        }
+
+        pushState(
+            interpolate(() => i18n.value.tools.paste.pasted, `${selectedEntities.length}`),
+            transaction.commit(selectedEntities),
+        )
+        view.entities = {
+            hovered: [],
+            creating: [],
+        }
+
+        notify(interpolate(() => i18n.value.tools.paste.pasted, `${selectedEntities.length}`))
+    },
+
+    dragStart(x, y, modifiers) {
+        const data = clipboardEntry.value?.data
+        if (!data) return false
+
+        const { entities, preserveGroupIds } = cachedTransform(data.chart)
+        if (!entities.length) return false
+
+        active = {
+            lane: data.lane,
+            beat: data.beat,
+            chart: data.chart,
+            entities,
+            preserveGroupIds,
+        }
+
+        const lane = xToLane(x)
+        const beatOffset = yToBeatOffset(y, active.beat)
+
+        const creating: Entity[] = []
+        for (const entity of active.entities) {
+            const beat = entity.beat + beatOffset
+            if (beat < 0) continue
+
+            const result = creates[entity.type]?.(
+                active.entities,
+                entity as never,
+                active.lane,
+                lane,
+                beat,
+                modifiers.shift,
+                preserveGroupIds,
+            )
+            if (!result) continue
+
+            creating.push(result)
+        }
+
+        view.entities = {
+            hovered: [],
+            creating,
+        }
+
+        return true
+    },
+
+    dragUpdate(x, y, modifiers) {
+        if (!active) return false
+
+        const lane = xToLane(x)
+        const beatOffset = yToBeatOffset(y, active.beat)
+
+        const creating: Entity[] = []
+        for (const entity of active.entities) {
+            const beat = entity.beat + beatOffset
+            if (beat < 0) continue
+
+            const result = creates[entity.type]?.(
+                active.entities,
+                entity as never,
+                active.lane,
+                lane,
+                beat,
+                modifiers.shift,
+                active.preserveGroupIds,
+            )
+            if (!result) continue
+
+            creating.push(result)
+        }
+
+        view.entities = {
+            hovered: [],
+            creating,
+        }
+    },
+
+    async dragEnd(x, y, modifiers) {
+        if (!active) return
+
+        if (
+            active.entities.some(
+                (entity) =>
+                    entity.type === 'cameraEventJoint' ||
+                    entity.type === 'stageMaskEventJoint' ||
+                    entity.type === 'stagePivotEventJoint' ||
+                    entity.type === 'stageStyleEventJoint' ||
+                    entity.type === 'stageTransformEventJoint',
+            )
+        ) {
+            await checkDynamicStages()
+        }
+
+        const transaction = createTransaction(state.value)
+        const { entities, preserveGroupIds } = transform(
+            active.chart,
+            createPastedAsciiArtGroups(transaction, active.chart),
+        )
+
+        const lane = xToLane(x)
+        const beatOffset = yToBeatOffset(y, active.beat)
+
+        const selectedEntities: Entity[] = []
+        for (const entity of entities) {
+            const beat = entity.beat + beatOffset
+            if (beat < 0) continue
+
+            const result = pastes[entity.type]?.(
+                transaction,
+                entities,
+                entity as never,
+                active.lane,
+                lane,
+                beat,
+                modifiers.shift,
+                preserveGroupIds,
+            )
+            if (!result) continue
+
+            selectedEntities.push(...result)
+        }
+
+        pushState(
+            interpolate(() => i18n.value.tools.paste.pasted, `${selectedEntities.length}`),
+            transaction.commit(selectedEntities),
+        )
+        view.entities = {
+            hovered: [],
+            creating: [],
+        }
+
+        notify(interpolate(() => i18n.value.tools.paste.pasted, `${selectedEntities.length}`))
+
+        active = undefined
+    },
+}
+
+const createPastedAsciiArtGroups = (transaction: Transaction, chart: Chart) => {
+    const usedGroupIds = new Set([
+        ...chart.timeScales.map(({ groupId }) => groupId),
+        ...chart.slides.flatMap((slide) => slide.map(({ groupId }) => groupId)),
+    ])
+    const usedNames = new Set([...groups.value.values()].map(({ name }) => name))
+    const mappings = new Map<GroupId, GroupId>()
+
+    for (const [groupId, group] of chart.groups) {
+        if (!usedGroupIds.has(groupId) || !isAsciiArtGroup(group)) continue
+
+        const baseName = group.name.replace(/ #\d+$/, '')
+        let name = baseName
+        for (let index = 2; usedNames.has(name); index++) name = `${baseName} #${index}`
+
+        usedNames.add(name)
+        mappings.set(
+            groupId,
+            transaction.createGroup(name, {
+                forceNoteSpeed: group.forceNoteSpeed,
+                textArt: group.textArt,
+            }),
+        )
+    }
+
+    return mappings
+}
+
+const transform = (chart: Chart, pastedGroupMappings = new Map<GroupId, GroupId>()) => {
+    const groupIds = [...groups.value.keys()]
+    const groupMappings = new Map(
+        [...chart.groups.keys()].map((id, index) => [
+            id,
+            pastedGroupMappings.get(id) ?? groupIds[index],
+        ]),
+    )
+    const preserveGroupIds = new Set(
+        [...chart.groups.entries()]
+            .filter(([, group]) => isAsciiArtGroup(group))
+            .flatMap(([id]) => {
+                const mapped = groupMappings.get(id)
+                return mapped === undefined ? [] : [mapped]
+            }),
+    )
+
+    const stageIds = [...stages.value.keys()]
+    const stageMappings = new Map(
+        [...chart.stages.keys()].map((id, index) => [id, stageIds[index]]),
+    )
+
+    const mapGroupId = <T extends { groupId: GroupId }>(object: T) => ({
+        ...object,
+        groupId: groupMappings.get(object.groupId) ?? defaultGroupId.value,
+    })
+
+    const mapStageId = <T extends { stageId: StageId }>(object: T) => ({
+        ...object,
+        stageId: stageMappings.get(object.stageId) ?? defaultStageId.value,
+    })
+
+    return {
+        preserveGroupIds,
+        entities: [
+            ...chart.bpms.map(toBpmEntity),
+            ...chart.timeScales.map(mapGroupId).map(toTimeScaleEntity),
+
+            ...chart.cameraEvents.map(toCameraEventJointEntity),
+
+            ...chart.stageMaskEvents.map(mapStageId).map(toStageMaskEventJointEntity),
+            ...chart.stagePivotEvents.map(mapStageId).map(toStagePivotEventJointEntity),
+            ...chart.stageStyleEvents.map(mapStageId).map(toStageStyleEventJointEntity),
+            ...chart.stageTransformEvents.map(mapStageId).map(toStageTransformEventJointEntity),
+
+            ...chart.slides.flatMap((slide) => {
+                const slideId = createSlideId()
+
+                return slide
+                    .map(mapGroupId)
+                    .map(mapStageId)
+                    .map((note) => toNoteEntity(slideId, note))
+            }),
+        ],
+    }
+}
+
+let transformCache:
+    | {
+          chart: Chart
+          transformed: ReturnType<typeof transform>
+      }
+    | undefined
+
+const cachedTransform = (chart: Chart) => {
+    if (transformCache?.chart !== chart) {
+        transformCache = {
+            chart,
+            transformed: transform(chart),
+        }
+    }
+
+    return transformCache.transformed
+}
+
+const toMovedBpmObject = (entity: BpmEntity, beat: number): BpmObject => ({
+    ...entity,
+    beat,
+})
+
+const toMovedTimeScaleObject = (
+    entities: Entity[],
+    entity: TimeScaleEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+    preserveGroupIds: ReadonlySet<GroupId>,
+): TimeScaleObject => ({
+    ...entity,
+    groupId: preserveGroupIds.has(entity.groupId)
+        ? entity.groupId
+        : (view.groupId ?? entity.groupId),
+    beat,
+    editorLane: entities.every((entity) => entity.type === 'timeScale')
+        ? flip
+            ? -entity.editorLane + align(startLane) + align(lane)
+            : entity.editorLane - align(startLane) + align(lane)
+        : entity.editorLane,
+})
+
+const toMovedCameraEventObject = (
+    entity: CameraEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+): CameraEventObject => ({
+    ...entity,
+    beat,
+    cameraLeft: flip
+        ? -(entity.cameraLeft + entity.cameraSize) + align(startLane) + align(lane)
+        : entity.cameraLeft - align(startLane) + align(lane),
+    cameraZoomTargetLane: flip ? -entity.cameraZoomTargetLane : entity.cameraZoomTargetLane,
+    cameraRotation: flip ? -entity.cameraRotation : entity.cameraRotation,
+})
+
+const toMovedStageMaskEventObject = (
+    entity: StageMaskEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+): StageMaskEventObject => ({
+    ...entity,
+    stageId: view.stageId ?? entity.stageId,
+    beat,
+    maskLeft: flip
+        ? -(entity.maskLeft + entity.maskSize) + align(startLane) + align(lane)
+        : entity.maskLeft - align(startLane) + align(lane),
+})
+
+const toMovedStagePivotEventObject = (
+    entity: StagePivotEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+): StagePivotEventObject => ({
+    ...entity,
+    stageId: view.stageId ?? entity.stageId,
+    beat,
+    pivotLane: flip
+        ? -entity.pivotLane + align(startLane) + align(lane)
+        : entity.pivotLane - align(startLane) + align(lane),
+})
+
+const toMovedStageStyleEventObject = (
+    entities: Entity[],
+    entity: StageStyleEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+): StageStyleEventObject => ({
+    ...entity,
+    stageId: view.stageId ?? entity.stageId,
+    beat,
+    editorLane: entities.every((entity) => entity.type === 'stageStyleEventJoint')
+        ? flip
+            ? -entity.editorLane + align(startLane) + align(lane)
+            : entity.editorLane - align(startLane) + align(lane)
+        : entity.editorLane,
+    leftBorderStyle: flip ? entity.rightBorderStyle : entity.leftBorderStyle,
+    rightBorderStyle: flip ? entity.leftBorderStyle : entity.rightBorderStyle,
+})
+
+const toMovedStageTransformEventObject = (
+    entity: StageTransformEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+): StageTransformEventObject => ({
+    ...entity,
+    stageId: view.stageId ?? entity.stageId,
+    beat,
+    rotation: flip ? -entity.rotation : entity.rotation,
+    xTranslation: flip
+        ? -entity.xTranslation + align(startLane) + align(lane)
+        : entity.xTranslation - align(startLane) + align(lane),
+})
+
+const flippedFlickDirections: Record<FlickDirection, FlickDirection> = {
+    none: 'none',
+    up: 'up',
+    upLeft: 'upRight',
+    upRight: 'upLeft',
+    down: 'down',
+    downLeft: 'downRight',
+    downRight: 'downLeft',
+}
+
+const toMovedNoteObject = (
+    entity: NoteEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+    preserveGroupIds: ReadonlySet<GroupId>,
+): NoteObject => ({
+    ...entity,
+    groupId: preserveGroupIds.has(entity.groupId)
+        ? entity.groupId
+        : (view.groupId ?? entity.groupId),
+    stageId: view.stageId ?? entity.stageId,
+    beat,
+    left: flip
+        ? -(entity.left + entity.size) + align(startLane) + align(lane)
+        : entity.left - align(startLane) + align(lane),
+    flickDirection: flip ? flippedFlickDirections[entity.flickDirection] : entity.flickDirection,
+})
+
+type Create<T extends Entity> = (
+    entities: Entity[],
+    entity: T,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+    preserveGroupIds: ReadonlySet<GroupId>,
+) => Entity | undefined
+
+const creates: {
+    [T in Entity as T['type']]: Create<T> | undefined
+} = {
+    bpm: (entities, entity, startLane, lane, beat) => toBpmEntity(toMovedBpmObject(entity, beat)),
+    timeScale: (entities, entity, startLane, lane, beat, flip, preserveGroupIds) =>
+        toTimeScaleEntity(
+            toMovedTimeScaleObject(entities, entity, startLane, lane, beat, flip, preserveGroupIds),
+        ),
+
+    cameraEventJoint: (entities, entity, startLane, lane, beat, flip) =>
+        toCameraEventJointEntity(toMovedCameraEventObject(entity, startLane, lane, beat, flip)),
+    cameraEventConnection: undefined,
+
+    stageMaskEventJoint: (entities, entity, startLane, lane, beat, flip) =>
+        toStageMaskEventJointEntity(
+            toMovedStageMaskEventObject(entity, startLane, lane, beat, flip),
+        ),
+    stageMaskEventConnection: undefined,
+
+    stagePivotEventJoint: (entities, entity, startLane, lane, beat, flip) =>
+        toStagePivotEventJointEntity(
+            toMovedStagePivotEventObject(entity, startLane, lane, beat, flip),
+        ),
+    stagePivotEventConnection: undefined,
+
+    stageStyleEventJoint: (entities, entity, startLane, lane, beat, flip) =>
+        toStageStyleEventJointEntity(
+            toMovedStageStyleEventObject(entities, entity, startLane, lane, beat, flip),
+        ),
+    stageStyleEventConnection: undefined,
+
+    stageTransformEventJoint: (entities, entity, startLane, lane, beat, flip) =>
+        toStageTransformEventJointEntity(
+            toMovedStageTransformEventObject(entity, startLane, lane, beat, flip),
+        ),
+    stageTransformEventConnection: undefined,
+
+    note: (entities, entity, startLane, lane, beat, flip, preserveGroupIds) =>
+        toNoteEntity(
+            entity.slideId,
+            toMovedNoteObject(entity, startLane, lane, beat, flip, preserveGroupIds),
+        ),
+    connector: undefined,
+}
+
+type Paste<T extends Entity> = (
+    transaction: Transaction,
+    entities: Entity[],
+    entity: T,
+    startLane: number,
+    lane: number,
+    beat: number,
+    flip: boolean,
+    preserveGroupIds: ReadonlySet<GroupId>,
+) => Entity[] | undefined
+
+const pastes: {
+    [T in Entity as T['type']]: Paste<T> | undefined
+} = {
+    bpm: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedBpmObject(entity, beat)
+
+        const overlap = getInStoreGrid(transaction.store.grid, 'bpm', object.beat)?.find(
+            (entity) => entity.beat === object.beat,
+        )
+        if (overlap) removeBpm(transaction, overlap)
+
+        return addBpm(transaction, object)
+    },
+    timeScale: (transaction, entities, entity, startLane, lane, beat, flip, preserveGroupIds) => {
+        const object = toMovedTimeScaleObject(
+            entities,
+            entity,
+            startLane,
+            lane,
+            beat,
+            flip,
+            preserveGroupIds,
+        )
+
+        const overlap = getInStoreGrid(transaction.store.grid, 'timeScale', object.beat)?.find(
+            (entity) => entity.beat === object.beat && entity.groupId === object.groupId,
+        )
+        if (overlap) removeTimeScale(transaction, overlap)
+
+        return addTimeScale(transaction, object)
+    },
+
+    cameraEventJoint: (transaction, entities, entity, startLane, lane, beat, flip) => {
+        if (!isDynamicStages.value) return
+
+        const object = toMovedCameraEventObject(entity, startLane, lane, beat, flip)
+
+        return addCameraEventJoint(transaction, object)
+    },
+    cameraEventConnection: undefined,
+
+    stageMaskEventJoint: (transaction, entities, entity, startLane, lane, beat, flip) => {
+        if (!isDynamicStages.value) return
+
+        const object = toMovedStageMaskEventObject(entity, startLane, lane, beat, flip)
+
+        return addStageMaskEventJoint(transaction, object)
+    },
+    stageMaskEventConnection: undefined,
+
+    stagePivotEventJoint: (transaction, entities, entity, startLane, lane, beat, flip) => {
+        if (!isDynamicStages.value) return
+
+        const object = toMovedStagePivotEventObject(entity, startLane, lane, beat, flip)
+
+        return addStagePivotEventJoint(transaction, object)
+    },
+    stagePivotEventConnection: undefined,
+
+    stageStyleEventJoint: (transaction, entities, entity, startLane, lane, beat, flip) => {
+        if (!isDynamicStages.value) return
+
+        const object = toMovedStageStyleEventObject(entities, entity, startLane, lane, beat, flip)
+
+        return addStageStyleEventJoint(transaction, object)
+    },
+    stageStyleEventConnection: undefined,
+
+    stageTransformEventJoint: (transaction, entities, entity, startLane, lane, beat, flip) => {
+        if (!isDynamicStages.value) return
+
+        const object = toMovedStageTransformEventObject(entity, startLane, lane, beat, flip)
+
+        return addStageTransformEventJoint(transaction, object)
+    },
+    stageTransformEventConnection: undefined,
+
+    note: (transaction, entities, entity, startLane, lane, beat, flip, preserveGroupIds) => {
+        const object = toMovedNoteObject(entity, startLane, lane, beat, flip, preserveGroupIds)
+
+        return addNote(transaction, entity.slideId, object)
+    },
+    connector: undefined,
+}

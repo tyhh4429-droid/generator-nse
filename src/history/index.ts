@@ -1,0 +1,132 @@
+import { computed, ref, shallowReactive } from 'vue'
+import type { Chart } from '../chart'
+import { addToGroups, type Groups } from '../chart/groups'
+import { addDefaultStageToStages, type Stages } from '../chart/stages'
+import { switchToolTo } from '../editor/tools'
+import { i18n } from '../i18n'
+import { showModal } from '../modals'
+import ConfirmModal from '../modals/ConfirmModal.vue'
+import { settings } from '../settings'
+import { createState, type State } from '../state'
+import { cleanupWaveform } from '../waveform'
+import { resetAutoSave } from './autoSave/index.ts'
+
+const createDefaultChart = (): Chart => {
+    const groups: Groups = new Map()
+    addToGroups(groups)
+    if (settings.autoAddGroup) addToGroups(groups)
+
+    const stages: Stages = new Map()
+    addDefaultStageToStages(stages)
+
+    return {
+        initialLife: 1000,
+        isDynamicStages: false,
+        bpms: [
+            {
+                beat: 0,
+                bpm: 60,
+            },
+        ],
+        groups,
+        stages,
+        cameraEvents: [],
+        stageMaskEvents: [],
+        stagePivotEvents: [],
+        stageStyleEvents: [],
+        stageTransformEvents: [],
+        timeScales: [],
+        slides: [],
+    }
+}
+
+const index = ref(0)
+
+export const canUndo = computed(() => index.value > 0)
+
+const states = shallowReactive([
+    {
+        isDirty: false,
+        name: () => i18n.value.history.initialize,
+        state: createState(createDefaultChart(), 0),
+    },
+])
+
+export let levelDataHandle: FileSystemFileHandle | undefined
+
+addEventListener('beforeunload', (event) => {
+    if (canUndo.value) event.preventDefault()
+})
+
+// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+const current = computed(() => states[index.value]!)
+
+export const isDirty = computed(() => current.value.isDirty)
+
+export const state = computed(() => current.value.state)
+
+export const replaceState = (state: State) => {
+    states[index.value] = {
+        isDirty: current.value.isDirty,
+        name: current.value.name,
+        state,
+    }
+}
+
+export const pushState = (name: () => string, state: State) => {
+    states.splice(index.value + 1, states.length - index.value - 1, {
+        isDirty: true,
+        name,
+        state,
+    })
+    index.value++
+}
+
+export const undoState = () => {
+    if (!canUndo.value) return
+
+    const name = current.value.name
+    index.value--
+    return name
+}
+
+export const redoState = () => {
+    if (index.value >= states.length - 1) return
+
+    index.value++
+    return current.value.name
+}
+
+export const checkState = async () => {
+    if (!isDirty.value) return true
+
+    return await showModal(ConfirmModal, {
+        title: () => i18n.value.history.changes.title,
+        message: () => i18n.value.history.changes.message,
+    })
+}
+
+export const resetState = (
+    isDirty: boolean,
+    chart?: Chart,
+    offset?: number,
+    filename?: string,
+    handle?: FileSystemFileHandle,
+) => {
+    index.value = 0
+    states.splice(0, states.length, {
+        isDirty,
+        name: () => i18n.value.history.initialize,
+        state: createState(chart ?? createDefaultChart(), offset ?? 0, filename),
+    })
+    setLevelDataHandle(handle)
+
+    resetAutoSave()
+    cleanupWaveform()
+
+    switchToolTo('select')
+}
+
+export const setLevelDataHandle = (handle: FileSystemFileHandle | undefined) => {
+    levelDataHandle = handle
+}

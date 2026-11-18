@@ -1,0 +1,69 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { GroupId, GroupObject } from '../../../../../chart/groups'
+import { pushState, state } from '../../../../../history'
+import { groups } from '../../../../../history/groups'
+import { i18n } from '../../../../../i18n'
+import NameField from '../../../../../modals/form/NameField.vue'
+import OptionalNumberField from '../../../../../modals/form/OptionalNumberField.vue'
+import PropertiesModal from '../../../../../modals/form/PropertiesModal.vue'
+import { interpolate } from '../../../../../utils/interpolate'
+import { notify } from '../../../../notification'
+
+const props = defineProps<{
+    groupId: GroupId
+}>()
+
+const createModel = <K extends keyof GroupObject>(key: K) =>
+    computed({
+        get: () => {
+            const object = groups.value.get(props.groupId)
+            if (!object) throw new Error('Unexpected missing group')
+
+            return object[key]
+        },
+        set: (value) => {
+            const object = groups.value.get(props.groupId)
+            if (!object) throw new Error('Unexpected missing group')
+
+            const newObject = { ...object, [key]: value }
+
+            const newGroups = new Map(groups.value)
+            newGroups.set(props.groupId, newObject)
+
+            pushState(
+                interpolate(
+                    () => i18n.value.commands.manageGroups.modal.properties.modal.edited,
+                    newObject.name,
+                ),
+                {
+                    ...state.value,
+                    groups: newGroups,
+                },
+            )
+
+            notify(
+                interpolate(
+                    () => i18n.value.commands.manageGroups.modal.properties.modal.edited,
+                    newObject.name,
+                ),
+            )
+        },
+    })
+
+const name = createModel('name')
+const forceNoteSpeed = createModel('forceNoteSpeed')
+</script>
+
+<template>
+    <PropertiesModal :title="i18n.commands.manageGroups.modal.properties.modal.title">
+        <NameField v-model="name" />
+        <OptionalNumberField
+            v-model="forceNoteSpeed"
+            :label="i18n.commands.manageGroups.modal.properties.modal.forceNoteSpeed"
+            :min="1"
+            :max="12"
+            step="any"
+        />
+    </PropertiesModal>
+</template>

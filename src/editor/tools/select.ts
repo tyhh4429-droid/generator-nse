@@ -1,0 +1,863 @@
+import { type Tool } from '.'
+import type { BpmObject } from '../../chart/bpm'
+import type { CameraEventObject } from '../../chart/events/camera'
+import type { StageMaskEventObject } from '../../chart/events/stage/mask'
+import type { StagePivotEventObject } from '../../chart/events/stage/pivot'
+import type { StageStyleEventObject } from '../../chart/events/stage/style'
+import type { StageTransformEventObject } from '../../chart/events/stage/transform'
+import type { NoteObject } from '../../chart/note'
+import type { TimeScaleObject } from '../../chart/timeScale'
+import { pushState, replaceState, state } from '../../history'
+import { bpms } from '../../history/bpms'
+import { selectedEntities } from '../../history/selectedEntities'
+import { i18n } from '../../i18n'
+import type { Entity } from '../../state/entities'
+import { toBpmEntity, type BpmEntity } from '../../state/entities/bpm'
+import {
+    toCameraEventJointEntity,
+    type CameraEventJointEntity,
+} from '../../state/entities/events/joints/camera'
+import {
+    toStageMaskEventJointEntity,
+    type StageMaskEventJointEntity,
+} from '../../state/entities/events/joints/stage/mask'
+import {
+    toStagePivotEventJointEntity,
+    type StagePivotEventJointEntity,
+} from '../../state/entities/events/joints/stage/pivot'
+import {
+    toStageStyleEventJointEntity,
+    type StageStyleEventJointEntity,
+} from '../../state/entities/events/joints/stage/style'
+import {
+    toStageTransformEventJointEntity,
+    type StageTransformEventJointEntity,
+} from '../../state/entities/events/joints/stage/transform'
+import { toNoteEntity, type NoteEntity } from '../../state/entities/slides/note'
+import { toTimeScaleEntity, type TimeScaleEntity } from '../../state/entities/timeScale'
+import { beatToTime } from '../../state/integrals/bpms'
+import { addBpm, removeBpm } from '../../state/mutations/bpm'
+import { addCameraEventJoint, removeCameraEventJoint } from '../../state/mutations/events/camera'
+import {
+    addStageMaskEventJoint,
+    removeStageMaskEventJoint,
+} from '../../state/mutations/events/stage/mask'
+import {
+    addStagePivotEventJoint,
+    removeStagePivotEventJoint,
+} from '../../state/mutations/events/stage/pivot'
+import {
+    addStageStyleEventJoint,
+    removeStageStyleEventJoint,
+} from '../../state/mutations/events/stage/style'
+import {
+    addStageTransformEventJoint,
+    removeStageTransformEventJoint,
+} from '../../state/mutations/events/stage/transform'
+import { replaceNote } from '../../state/mutations/slides/note'
+import { addTimeScale, removeTimeScale } from '../../state/mutations/timeScale'
+import { getInStoreGrid } from '../../state/store/grid'
+import { createTransaction, type Transaction } from '../../state/transaction'
+import { interpolate } from '../../utils/interpolate'
+import {
+    expandAsciiArtEntities,
+    getSelectedAsciiArtGroups,
+    getSelectedAsciiArtNotes,
+} from '../asciiArt'
+import { isTextArtMoveKeyPressed } from '../controls/keys'
+import { notify } from '../notification'
+import {
+    focusViewAtBeat,
+    setViewHover,
+    view,
+    xToLane,
+    yToBeatOffset,
+    yToTime,
+    yToValidBeat,
+} from '../view'
+import {
+    hitAllEntitiesAtPoint,
+    hitAllEntitiesInSelection,
+    modifyEntities,
+    offset,
+    resize,
+    toSelection,
+} from './utils'
+
+type AsciiArtResize =
+    | {
+          axis: 'move'
+      }
+    | {
+          axis: 'horizontal'
+          anchorLane: number
+          startLane: number
+      }
+    | {
+          axis: 'vertical'
+          anchorBeat: number
+          startBeat: number
+      }
+
+let active:
+    | {
+          type: 'move'
+          lane: number
+          startBeatOffset: number
+          focus: Entity
+          entities: Entity[]
+          asciiArtResize?: AsciiArtResize
+      }
+    | {
+          type: 'select'
+          lane: number
+          time: number
+          count: number
+          entities: Entity[]
+      }
+    | undefined
+
+const getActiveBeatOffset = (
+    y: number,
+    move: {
+        focus: Entity
+        entities: Entity[]
+        startBeatOffset: number
+        asciiArtResize?: AsciiArtResize
+    },
+) => {
+    if (move.asciiArtResize?.axis === 'horizontal') return 0
+
+    const beatOffset =
+        move.asciiArtResize?.axis === 'move'
+            ? yToBeatOffset(y, move.focus.beat) - move.startBeatOffset
+            : yToBeatOffset(y, move.focus.beat)
+    if (move.asciiArtResize?.axis !== 'move') return beatOffset
+
+    return Math.max(beatOffset, -Math.min(...move.entities.map((entity) => entity.beat)))
+}
+
+export const select: Tool = {
+    title: () => i18n.value.tools.select.title,
+
+    hover(x, y, modifiers) {
+        const entities = modifyEntities(hitAllEntitiesAtPoint(x, y), modifiers)
+
+        view.entities = {
+            hovered: entities,
+            creating: [],
+        }
+    },
+
+    tap(x, y, modifiers) {
+        if (modifiers.ctrl) {
+            const entities = modifyEntities(hitAllEntitiesAtPoint(x, y), modifiers)
+
+            const [entity] = entities
+            if (!entity) return
+
+            const targets = entities.every((entity) => selectedEntities.value.includes(entity))
+                ? selectedEntities.value.filter((entity) => !entities.includes(entity))
+                : [...new Set([...selectedEntities.value, ...entities])]
+
+            replaceState({
+                ...state.value,
+                selectedEntities: targets,
+            })
+            view.entities = {
+                hovered: entities,
+                creating: [],
+            }
+            focusViewAtBeat(entity.beat)
+
+            notify(interpolate(() => i18n.value.tools.select.selected, `${targets.length}`))
+        } else {
+            const entities = hitAllEntitiesAtPoint(x, y)
+
+            const selectedLength = selectedEntities.value.length
+            const current = selectedLength ? selectedEntities.value[0] : undefined
+
+            const index = current ? (entities.indexOf(current) + 1) % entities.length : 0
+            const entity = entities[index]
+            const targets = modifyEntities(entity ? [entity] : [], modifiers)
+
+            replaceState({
+                ...state.value,
+                selectedEntities: targets,
+            })
+            view.entities = {
+                hovered: entities,
+                creating: [],
+            }
+
+            if (entity) {
+                focusViewAtBeat(entity.beat)
+
+                notify(interpolate(() => i18n.value.tools.select.selected, `${targets.length}`))
+            } else {
+                focusViewAtBeat(yToValidBeat(y))
+
+                if (selectedLength) notify(() => i18n.value.tools.select.deselected)
+            }
+        }
+    },
+
+    dragStart(x, y, modifiers) {
+        const lane = xToLane(x)
+        const time = yToTime(y)
+
+        const asciiArtMove = (() => {
+            if (!isTextArtMoveKeyPressed.value) return
+
+            const selectedGroups = getSelectedAsciiArtGroups(
+                selectedEntities.value,
+                state.value.groups,
+                state.value.store,
+            )
+            if (!selectedGroups?.length) return
+
+            const hitGroup = selectedGroups.find(({ notes }) => {
+                const left = Math.min(...notes.map((note) => note.left))
+                const right = Math.max(...notes.map((note) => note.left + note.size))
+                const beatMin = Math.min(...notes.map((note) => note.beat))
+                const beatMax = Math.max(...notes.map((note) => note.beat))
+                const timeMin = beatToTime(bpms.value, beatMin)
+                const timeMax = beatToTime(bpms.value, beatMax)
+
+                return (
+                    lane >= left - 0.15 &&
+                    lane <= right + 0.15 &&
+                    time >= timeMin - 0.1 &&
+                    time <= timeMax + 0.1
+                )
+            })
+            const focus = hitGroup?.notes[0]
+            if (!focus) return
+
+            return {
+                focus,
+                notes: selectedGroups.flatMap(({ notes }) => notes),
+            }
+        })()
+
+        const selectedAsciiArtNotes = asciiArtMove
+            ? undefined
+            : modifiers.alt
+              ? undefined
+              : getSelectedAsciiArtNotes(
+                    selectedEntities.value,
+                    state.value.groups,
+                    state.value.store,
+                )
+        const asciiArtHandle = (() => {
+            if (!selectedAsciiArtNotes) return
+
+            const left = Math.min(...selectedAsciiArtNotes.map((note) => note.left))
+            const right = Math.max(...selectedAsciiArtNotes.map((note) => note.left + note.size))
+            const center = (left + right) / 2
+            const beatMin = Math.min(...selectedAsciiArtNotes.map((note) => note.beat))
+            const beatMax = Math.max(...selectedAsciiArtNotes.map((note) => note.beat))
+            const timeMin = beatToTime(bpms.value, beatMin)
+            const timeMax = beatToTime(bpms.value, beatMax)
+
+            if (time >= timeMin - 0.1 && time <= timeMax + 0.1) {
+                if (Math.abs(lane - left) <= 0.4) {
+                    return {
+                        focus: selectedAsciiArtNotes.reduce((current, note) =>
+                            note.left < current.left ? note : current,
+                        ),
+                        resize: {
+                            axis: 'horizontal',
+                            anchorLane: right,
+                            startLane: left,
+                        } satisfies AsciiArtResize,
+                    }
+                }
+                if (Math.abs(lane - right) <= 0.4) {
+                    return {
+                        focus: selectedAsciiArtNotes.reduce((current, note) =>
+                            note.left + note.size > current.left + current.size ? note : current,
+                        ),
+                        resize: {
+                            axis: 'horizontal',
+                            anchorLane: left,
+                            startLane: right,
+                        } satisfies AsciiArtResize,
+                    }
+                }
+            }
+
+            if (Math.abs(lane - center) > 0.4) return
+
+            if (Math.abs(time - timeMin) <= 0.1) {
+                return {
+                    focus: selectedAsciiArtNotes.reduce((current, note) =>
+                        note.beat < current.beat ? note : current,
+                    ),
+                    resize: {
+                        axis: 'vertical',
+                        anchorBeat: beatMax,
+                        startBeat: beatMin,
+                    } satisfies AsciiArtResize,
+                }
+            }
+            if (Math.abs(time - timeMax) <= 0.1) {
+                return {
+                    focus: selectedAsciiArtNotes.reduce((current, note) =>
+                        note.beat > current.beat ? note : current,
+                    ),
+                    resize: {
+                        axis: 'vertical',
+                        anchorBeat: beatMin,
+                        startBeat: beatMax,
+                    } satisfies AsciiArtResize,
+                }
+            }
+        })()
+
+        const hitEntities = hitAllEntitiesAtPoint(x, y)
+        const entities = asciiArtMove
+            ? asciiArtMove.notes
+            : asciiArtHandle && selectedAsciiArtNotes
+              ? selectedAsciiArtNotes
+              : modifiers.alt
+                ? hitEntities
+                : expandAsciiArtEntities(hitEntities, state.value.groups, state.value.store)
+
+        const focus =
+            asciiArtMove?.focus ??
+            asciiArtHandle?.focus ??
+            entities.find((entity) => selectedEntities.value.includes(entity))
+        if (focus) {
+            const movingEntities = asciiArtMove
+                ? asciiArtMove.notes
+                : modifiers.alt
+                  ? [focus]
+                  : selectedEntities.value
+
+            if (modifiers.alt && !asciiArtMove) {
+                replaceState({
+                    ...state.value,
+                    selectedEntities: movingEntities,
+                })
+            }
+
+            focusViewAtBeat(focus.beat)
+
+            notify(interpolate(() => i18n.value.tools.select.moving, `${movingEntities.length}`))
+
+            active = {
+                type: 'move',
+                lane,
+                startBeatOffset: yToBeatOffset(y, focus.beat),
+                focus,
+                entities: movingEntities,
+                asciiArtResize: asciiArtMove ? { axis: 'move' } : asciiArtHandle?.resize,
+            }
+        } else {
+            const [entity] = entities
+            if (entity) {
+                replaceState({
+                    ...state.value,
+                    selectedEntities: entities,
+                })
+                view.entities = {
+                    hovered: [],
+                    creating: [],
+                }
+                focusViewAtBeat(entity.beat)
+
+                notify(interpolate(() => i18n.value.tools.select.moving, `${entities.length}`))
+
+                active = {
+                    type: 'move',
+                    lane,
+                    startBeatOffset: yToBeatOffset(y, entity.beat),
+                    focus: entity,
+                    entities,
+                    asciiArtResize: undefined,
+                }
+            } else {
+                active = {
+                    type: 'select',
+                    lane,
+                    time,
+                    count: -1,
+                    entities: selectedEntities.value,
+                }
+            }
+        }
+
+        return true
+    },
+
+    dragUpdate(x, y, modifiers) {
+        if (!active) return
+
+        setViewHover(y)
+
+        switch (active.type) {
+            case 'move': {
+                const lane = xToLane(x)
+                const beatOffset = getActiveBeatOffset(y, active)
+
+                const creating: Entity[] = []
+                for (const entity of active.entities) {
+                    const beat = entity.beat + beatOffset
+                    if (beat < 0) continue
+
+                    const result = creates[entity.type]?.(
+                        active.entities,
+                        entity as never,
+                        active.lane,
+                        lane,
+                        beat,
+                        active.focus,
+                        active.asciiArtResize,
+                    )
+                    if (!result) continue
+
+                    creating.push(result)
+                }
+
+                view.entities = {
+                    hovered: [],
+                    creating,
+                }
+                focusViewAtBeat(active.focus.beat + beatOffset)
+                break
+            }
+            case 'select': {
+                const selection = toSelection(active.lane, active.time, x, y)
+                const entities = modifyEntities(hitAllEntitiesInSelection(selection), modifiers)
+                const targets = modifiers.ctrl
+                    ? [...new Set([...active.entities, ...entities])]
+                    : entities
+
+                replaceState({
+                    ...state.value,
+                    selectedEntities: targets,
+                })
+                view.selection = selection
+                view.entities = {
+                    hovered: [],
+                    creating: [],
+                }
+
+                if (active.count === targets.length) return
+                active.count = targets.length
+
+                notify(interpolate(() => i18n.value.tools.select.selecting, `${targets.length}`))
+                break
+            }
+        }
+    },
+
+    dragEnd(x, y, modifiers) {
+        if (!active) return
+
+        switch (active.type) {
+            case 'move': {
+                const transaction = createTransaction(state.value)
+
+                const lane = xToLane(x)
+                const beatOffset = getActiveBeatOffset(y, active)
+
+                const entities = active.entities.sort(
+                    beatOffset > 0 ? (a, b) => b.beat - a.beat : (a, b) => a.beat - b.beat,
+                )
+
+                const selectedEntities: Entity[] = []
+                for (const entity of entities) {
+                    const beat = entity.beat + beatOffset
+                    if (beat < 0) continue
+
+                    const result = moves[entity.type]?.(
+                        transaction,
+                        entities,
+                        entity as never,
+                        active.lane,
+                        lane,
+                        beat,
+                        active.focus,
+                        active.asciiArtResize,
+                    )
+                    if (!result) continue
+
+                    selectedEntities.push(...result)
+                }
+
+                pushState(
+                    interpolate(() => i18n.value.tools.select.moved, `${selectedEntities.length}`),
+                    transaction.commit(selectedEntities),
+                )
+                view.entities = {
+                    hovered: [],
+                    creating: [],
+                }
+                focusViewAtBeat(active.focus.beat + beatOffset)
+
+                notify(
+                    interpolate(() => i18n.value.tools.select.moved, `${selectedEntities.length}`),
+                )
+                break
+            }
+            case 'select': {
+                const selection = toSelection(active.lane, active.time, x, y)
+                const entities = modifyEntities(hitAllEntitiesInSelection(selection), modifiers)
+                const targets = modifiers.ctrl
+                    ? [...new Set([...active.entities, ...entities])]
+                    : entities
+
+                replaceState({
+                    ...state.value,
+                    selectedEntities: targets,
+                })
+                view.selection = undefined
+                view.entities = {
+                    hovered: [],
+                    creating: [],
+                }
+
+                notify(interpolate(() => i18n.value.tools.select.selected, `${targets.length}`))
+                break
+            }
+        }
+
+        active = undefined
+    },
+}
+
+const toMovedBpmObject = (entity: BpmEntity, beat: number): BpmObject => ({
+    ...entity,
+    beat,
+})
+
+const toMovedTimeScaleObject = (
+    entities: Entity[],
+    entity: TimeScaleEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+): TimeScaleObject => ({
+    ...entity,
+    beat,
+    editorLane: entities.every((entity) => entity.type === 'timeScale')
+        ? entity.editorLane + offset(startLane, lane)
+        : entity.editorLane,
+})
+
+const toMovedCameraEventObject = (
+    entities: Entity[],
+    entity: CameraEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    focus: Entity,
+): CameraEventObject => {
+    if (
+        focus.type === 'cameraEventJoint' &&
+        entities.every((entity) => entity.type === 'cameraEventJoint') &&
+        (startLane <= focus.cameraLeft + 0.5 ||
+            startLane >= focus.cameraLeft + focus.cameraSize - 0.5)
+    ) {
+        const [cameraLeft, cameraSize] = resize(
+            entity.cameraLeft +
+                (startLane >= focus.cameraLeft + focus.cameraSize / 2 ? 0 : entity.cameraSize),
+            lane,
+            6,
+            24,
+        )
+
+        return {
+            ...entity,
+            cameraLeft,
+            cameraSize,
+        }
+    }
+
+    return {
+        ...entity,
+        beat,
+        cameraLeft: entity.cameraLeft + offset(startLane, lane),
+    }
+}
+
+const toMovedStageMaskEventObject = (
+    entities: Entity[],
+    entity: StageMaskEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    focus: Entity,
+): StageMaskEventObject => {
+    if (
+        focus.type === 'stageMaskEventJoint' &&
+        entities.every((entity) => entity.type === 'stageMaskEventJoint') &&
+        (startLane <= focus.maskLeft + 0.5 || startLane >= focus.maskLeft + focus.maskSize - 0.5)
+    ) {
+        const [maskLeft, maskSize] = resize(
+            entity.maskLeft +
+                (startLane >= focus.maskLeft + focus.maskSize / 2 ? 0 : entity.maskSize),
+            lane,
+        )
+
+        return {
+            ...entity,
+            maskLeft,
+            maskSize,
+        }
+    }
+
+    return {
+        ...entity,
+        beat,
+        maskLeft: entity.maskLeft + offset(startLane, lane),
+    }
+}
+
+const toMovedStagePivotEventObject = (
+    entity: StagePivotEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+): StagePivotEventObject => ({
+    ...entity,
+    beat,
+    pivotLane: entity.pivotLane + offset(startLane, lane),
+})
+
+const toMovedStageStyleEventObject = (
+    entities: Entity[],
+    entity: StageStyleEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+): StageStyleEventObject => ({
+    ...entity,
+    beat,
+    editorLane: entities.every((entity) => entity.type === 'stageStyleEventJoint')
+        ? entity.editorLane + offset(startLane, lane)
+        : entity.editorLane,
+})
+
+const toMovedStageTransformEventObject = (
+    entity: StageTransformEventJointEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+): StageTransformEventObject => ({
+    ...entity,
+    beat,
+    xTranslation: entity.xTranslation + offset(startLane, lane),
+})
+
+const toMovedNoteObject = (
+    entities: Entity[],
+    entity: NoteEntity,
+    startLane: number,
+    lane: number,
+    beat: number,
+    focus: Entity,
+    asciiArtResize: AsciiArtResize | undefined,
+): NoteObject => {
+    if (asciiArtResize?.axis === 'horizontal') {
+        const distance = asciiArtResize.startLane - asciiArtResize.anchorLane
+        const scale = distance ? (lane - asciiArtResize.anchorLane) / distance : 1
+        if (scale <= 0.01) return entity
+
+        return {
+            ...entity,
+            left: asciiArtResize.anchorLane + (entity.left - asciiArtResize.anchorLane) * scale,
+            size: entity.size * scale,
+        }
+    }
+
+    if (asciiArtResize?.axis === 'vertical') {
+        const targetBeat = asciiArtResize.startBeat + (beat - entity.beat)
+        const distance = asciiArtResize.startBeat - asciiArtResize.anchorBeat
+        const scale = distance ? (targetBeat - asciiArtResize.anchorBeat) / distance : 1
+        if (scale <= 0.01) return entity
+
+        return {
+            ...entity,
+            beat: asciiArtResize.anchorBeat + (entity.beat - asciiArtResize.anchorBeat) * scale,
+        }
+    }
+
+    if (
+        !asciiArtResize &&
+        focus.type === 'note' &&
+        entities.every((entity) => entity.type === 'note') &&
+        (startLane <= focus.left + 0.5 || startLane >= focus.left + focus.size - 0.5)
+    ) {
+        const isLeft = startLane >= focus.left + focus.size / 2
+
+        const [left, size] = resize(
+            entity.left + (isLeft ? 0 : entity.size),
+            entity.left + (isLeft ? entity.size : 0) + (lane - startLane),
+            1,
+        )
+
+        return {
+            ...entity,
+            left,
+            size,
+        }
+    }
+
+    return {
+        ...entity,
+        beat,
+        left: entity.left + offset(startLane, lane),
+    }
+}
+
+type Create<T extends Entity> = (
+    entities: Entity[],
+    entity: T,
+    startLane: number,
+    lane: number,
+    beat: number,
+    focus: Entity,
+    asciiArtResize: AsciiArtResize | undefined,
+) => Entity | undefined
+
+const creates: {
+    [T in Entity as T['type']]: Create<T> | undefined
+} = {
+    bpm: (entities, entity, startLane, lane, beat) => toBpmEntity(toMovedBpmObject(entity, beat)),
+    timeScale: (entities, entity, startLane, lane, beat) =>
+        toTimeScaleEntity(toMovedTimeScaleObject(entities, entity, startLane, lane, beat)),
+
+    cameraEventJoint: (entities, entity, startLane, lane, beat, focus) =>
+        toCameraEventJointEntity(
+            toMovedCameraEventObject(entities, entity, startLane, lane, beat, focus),
+        ),
+    cameraEventConnection: undefined,
+
+    stageMaskEventJoint: (entities, entity, startLane, lane, beat, focus) =>
+        toStageMaskEventJointEntity(
+            toMovedStageMaskEventObject(entities, entity, startLane, lane, beat, focus),
+        ),
+    stageMaskEventConnection: undefined,
+
+    stagePivotEventJoint: (entities, entity, startLane, lane, beat) =>
+        toStagePivotEventJointEntity(toMovedStagePivotEventObject(entity, startLane, lane, beat)),
+    stagePivotEventConnection: undefined,
+
+    stageStyleEventJoint: (entities, entity, startLane, lane, beat) =>
+        toStageStyleEventJointEntity(
+            toMovedStageStyleEventObject(entities, entity, startLane, lane, beat),
+        ),
+    stageStyleEventConnection: undefined,
+
+    stageTransformEventJoint: (entities, entity, startLane, lane, beat) =>
+        toStageTransformEventJointEntity(
+            toMovedStageTransformEventObject(entity, startLane, lane, beat),
+        ),
+    stageTransformEventConnection: undefined,
+
+    note: (entities, entity, startLane, lane, beat, focus, asciiArtResize) =>
+        toNoteEntity(
+            entity.slideId,
+            toMovedNoteObject(entities, entity, startLane, lane, beat, focus, asciiArtResize),
+            entity,
+        ),
+    connector: undefined,
+}
+
+type Move<T extends Entity> = (
+    transaction: Transaction,
+    entities: Entity[],
+    entity: T,
+    startLane: number,
+    lane: number,
+    beat: number,
+    focus: Entity,
+    asciiArtResize: AsciiArtResize | undefined,
+) => Entity[] | undefined
+
+const moves: {
+    [T in Entity as T['type']]: Move<T> | undefined
+} = {
+    bpm: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedBpmObject(entity, beat)
+
+        if (entity.beat) removeBpm(transaction, entity)
+
+        const overlap = getInStoreGrid(transaction.store.grid, 'bpm', object.beat)?.find(
+            (entity) => entity.beat === object.beat,
+        )
+        if (overlap) removeBpm(transaction, overlap)
+
+        return addBpm(transaction, object)
+    },
+    timeScale: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedTimeScaleObject(entities, entity, startLane, lane, beat)
+
+        removeTimeScale(transaction, entity)
+
+        const overlap = getInStoreGrid(transaction.store.grid, 'timeScale', object.beat)?.find(
+            (entity) => entity.beat === object.beat && entity.groupId === object.groupId,
+        )
+        if (overlap) removeTimeScale(transaction, overlap)
+
+        return addTimeScale(transaction, object)
+    },
+
+    cameraEventJoint: (transaction, entities, entity, startLane, lane, beat, focus) => {
+        const object = toMovedCameraEventObject(entities, entity, startLane, lane, beat, focus)
+
+        removeCameraEventJoint(transaction, entity)
+        return addCameraEventJoint(transaction, object)
+    },
+    cameraEventConnection: undefined,
+
+    stageMaskEventJoint: (transaction, entities, entity, startLane, lane, beat, focus) => {
+        const object = toMovedStageMaskEventObject(entities, entity, startLane, lane, beat, focus)
+
+        removeStageMaskEventJoint(transaction, entity)
+        return addStageMaskEventJoint(transaction, object)
+    },
+    stageMaskEventConnection: undefined,
+
+    stagePivotEventJoint: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedStagePivotEventObject(entity, startLane, lane, beat)
+
+        removeStagePivotEventJoint(transaction, entity)
+        return addStagePivotEventJoint(transaction, object)
+    },
+    stagePivotEventConnection: undefined,
+
+    stageStyleEventJoint: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedStageStyleEventObject(entities, entity, startLane, lane, beat)
+
+        removeStageStyleEventJoint(transaction, entity)
+        return addStageStyleEventJoint(transaction, object)
+    },
+    stageStyleEventConnection: undefined,
+
+    stageTransformEventJoint: (transaction, entities, entity, startLane, lane, beat) => {
+        const object = toMovedStageTransformEventObject(entity, startLane, lane, beat)
+
+        removeStageTransformEventJoint(transaction, entity)
+        return addStageTransformEventJoint(transaction, object)
+    },
+    stageTransformEventConnection: undefined,
+
+    note: (transaction, entities, entity, startLane, lane, beat, focus, asciiArtResize) => {
+        const object = toMovedNoteObject(
+            entities,
+            entity,
+            startLane,
+            lane,
+            beat,
+            focus,
+            asciiArtResize,
+        )
+
+        return replaceNote(transaction, entity, object)
+    },
+    connector: undefined,
+}

@@ -1,0 +1,110 @@
+import { groups } from '../../history/groups'
+import { hitAllEntities, hitEntities, store } from '../../history/store'
+import type { Entity, EntityType } from '../../state/entities'
+import { align, clamp } from '../../utils/math'
+import { expandAsciiArtEntities } from '../asciiArt'
+import type { Modifiers } from '../controls/gestures/pointer'
+import { view, xToLane, yToTime, type Selection } from '../view'
+
+export const offset = (startLane: number, lane: number) => align(lane - startLane)
+
+export const resize = (anchor: number, lane: number, min = 0, max = Number.POSITIVE_INFINITY) => {
+    const size = clamp(Math.abs(align(lane) - anchor), min, max)
+
+    return [anchor - (lane >= anchor ? 0 : size), size] as const
+}
+
+export const hitEntitiesAtPoint = <T extends EntityType>(type: T, x: number, y: number) =>
+    hitEntities(type, xToLane(x - 10), xToLane(x + 10), yToTime(y + 10), yToTime(y - 10)).filter(
+        isVisible,
+    )
+
+export const hitAllEntitiesAtPoint = (x: number, y: number) =>
+    hitAllEntities(xToLane(x - 10), xToLane(x + 10), yToTime(y + 10), yToTime(y - 10)).filter(
+        isVisible,
+    )
+
+export const hitEntitiesInSelection = <T extends EntityType>(type: T, selection: Selection) =>
+    hitEntities(
+        type,
+        selection.laneMin,
+        selection.laneMax,
+        selection.timeMin,
+        selection.timeMax,
+    ).filter(isVisible)
+
+export const hitAllEntitiesInSelection = (selection: Selection) =>
+    hitAllEntities(
+        selection.laneMin,
+        selection.laneMax,
+        selection.timeMin,
+        selection.timeMax,
+    ).filter(isVisible)
+
+export const modifyEntities = (entities: Entity[], modifiers: Modifiers) => {
+    if (modifiers.alt) return entities
+
+    const groupedEntities = expandAsciiArtEntities(entities, groups.value, store.value)
+    if (!modifiers.shift) return groupedEntities
+
+    const allEntities = new Set(groupedEntities)
+
+    for (const entity of groupedEntities) {
+        if (entity.type !== 'note') continue
+
+        const notes = store.value.slides.note.get(entity.slideId)
+        if (!notes) continue
+
+        for (const note of notes) {
+            allEntities.add(note)
+        }
+    }
+
+    return [...allEntities]
+}
+
+export const toSelection = (startLane: number, startTime: number, x: number, y: number) => {
+    let laneMin = startLane
+    let timeMin = startTime
+    let laneMax = xToLane(x)
+    let timeMax = yToTime(y)
+
+    if (laneMin > laneMax) [laneMin, laneMax] = [laneMax, laneMin]
+    if (timeMin > timeMax) [timeMin, timeMax] = [timeMax, timeMin]
+
+    return {
+        laneMin,
+        laneMax,
+        timeMin,
+        timeMax,
+    }
+}
+
+const isVisible = (entity: Entity) => {
+    if (!view.visibilities[entity.type]) return false
+
+    switch (entity.type) {
+        case 'bpm':
+        case 'cameraEventJoint':
+            return true
+        case 'timeScale':
+            return view.groupId === undefined || entity.groupId === view.groupId
+        case 'stageMaskEventJoint':
+        case 'stagePivotEventJoint':
+        case 'stageStyleEventJoint':
+        case 'stageTransformEventJoint':
+            return view.stageId === undefined || entity.stageId === view.stageId
+        case 'note':
+            return (
+                (view.groupId === undefined || entity.groupId === view.groupId) &&
+                (view.stageId === undefined || entity.stageId === view.stageId)
+            )
+        case 'cameraEventConnection':
+        case 'stageMaskEventConnection':
+        case 'stagePivotEventConnection':
+        case 'stageStyleEventConnection':
+        case 'stageTransformEventConnection':
+        case 'connector':
+            return false
+    }
+}
