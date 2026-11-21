@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
+import { storageGet, storageSet } from '../../../storage'
 import type { GroupId } from '../../../chart/groups'
 import type { ConnectorGuideColor, NoteObject } from '../../../chart/note'
 import type { StageId } from '../../../chart/stages'
@@ -33,18 +34,59 @@ const emit = defineEmits<{
 
 const fileName = ref<string>()
 const source = shallowRef<HTMLCanvasElement>()
-const startBeat = ref(0)
-const left = ref(-6.5)
-const width = ref(13)
-const rowSpacing = ref(0.125)
-const anchorWidth = ref(0.5)
-const threshold = ref(128)
-const foreground = ref<ImageArtForeground>('dark')
-const color = ref<ConnectorGuideColor>('green')
+
+type ImageArtSettings = {
+    startBeat: number
+    left: number
+    width: number
+    rowSpacing: number
+    anchorWidth: number
+    threshold: number
+    foreground: ImageArtForeground
+    color: ConnectorGuideColor
+}
+
+const savedSettings = storageGet(
+    'utilities.imageArt.settings',
+    {},
+) as Partial<ImageArtSettings>
+
+const getNumber = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+
+const startBeat = ref(getNumber(savedSettings.startBeat, 0))
+const left = ref(getNumber(savedSettings.left, -6.5))
+const width = ref(getNumber(savedSettings.width, 13))
+const rowSpacing = ref(getNumber(savedSettings.rowSpacing, 0.125))
+const anchorWidth = ref(getNumber(savedSettings.anchorWidth, 0.5))
+const threshold = ref(getNumber(savedSettings.threshold, 128))
+
+const foreground = ref<ImageArtForeground>(
+    savedSettings.foreground === 'light' ? 'light' : 'dark',
+)
+
+const color = ref<ConnectorGuideColor>(
+    savedSettings.color === 'yellow' ? 'yellow' : 'green',
+)
 const error = ref('')
 const isLoading = ref(false)
 const isGenerating = ref(false)
 const previewCanvas = ref<HTMLCanvasElement>()
+    watch(
+    [startBeat, left, width, rowSpacing, anchorWidth, threshold, foreground, color],
+    () => {
+        storageSet('utilities.imageArt.settings', {
+            startBeat: startBeat.value,
+            left: left.value,
+            width: width.value,
+            rowSpacing: rowSpacing.value,
+            anchorWidth: anchorWidth.value,
+            threshold: threshold.value,
+            foreground: foreground.value,
+            color: color.value,
+        })
+    },
+)
 
 const emptyArt = (): BinaryImageArt => ({
     width: 0,
