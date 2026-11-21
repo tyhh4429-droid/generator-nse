@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
+import { storageGet, storageSet } from '../../../storage'
 import type { TextArtGroupData } from '../../../chart/groups'
 import type { NoteObject } from '../../../chart/note'
 import { pushState, state } from '../../../history'
@@ -40,18 +41,55 @@ const maxGeneratedNotes = 8000
 const text = ref('SEKAI')
 const fontFileName = ref<string>()
 const customFont = shallowRef<CustomStrokeFont>()
-const customFontMode = ref<CustomFontMode>('outline')
-const startBeat = ref(0)
-const left = ref(-6.5)
-const horizontalScale = ref(0.15)
-const verticalScale = ref(0.125)
-const strokeWidth = ref(1)
-const style = ref<'trace' | 'critical'>('trace')
+
+type AsciiArtSettings = {
+    customFontMode: CustomFontMode
+    startBeat: number
+    left: number
+    horizontalScale: number
+    verticalScale: number
+    strokeWidth: number
+    style: 'trace' | 'critical'
+}
+
+const savedSettings = storageGet(
+    'utilities.asciiArt.settings',
+    {},
+) as Partial<AsciiArtSettings>
+
+const getNumber = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+
+const customFontMode = ref<CustomFontMode>(
+    savedSettings.customFontMode === 'centerline' ? 'centerline' : 'outline',
+)
+const startBeat = ref(getNumber(savedSettings.startBeat, 0))
+const left = ref(getNumber(savedSettings.left, -6.5))
+const horizontalScale = ref(getNumber(savedSettings.horizontalScale, 0.15))
+const verticalScale = ref(getNumber(savedSettings.verticalScale, 0.125))
+const strokeWidth = ref(getNumber(savedSettings.strokeWidth, 1))
+const style = ref<'trace' | 'critical'>(
+    savedSettings.style === 'critical' ? 'critical' : 'trace',
+)
 const error = ref('')
 const isPreviewLoading = ref(false)
 const isFontLoading = ref(false)
 const isLoading = computed(() => isPreviewLoading.value || isFontLoading.value)
 const isGenerating = ref(false)
+    watch(
+    [customFontMode, startBeat, left, horizontalScale, verticalScale, strokeWidth, style],
+    () => {
+        storageSet('utilities.asciiArt.settings', {
+            customFontMode: customFontMode.value,
+            startBeat: startBeat.value,
+            left: left.value,
+            horizontalScale: horizontalScale.value,
+            verticalScale: verticalScale.value,
+            strokeWidth: strokeWidth.value,
+            style: style.value,
+        })
+    },
+)
 
 const emptyArt = (): StrokeText => ({
     bounds: { minX: 0, maxX: 1, minY: 0, maxY: 1 },
