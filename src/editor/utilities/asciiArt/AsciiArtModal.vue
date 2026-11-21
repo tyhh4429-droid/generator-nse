@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
-import { storageGet, storageSet } from '../../../storage'
+import { storageGet, storageSet, storageRemove } from '../../../storage'
 import type { TextArtGroupData } from '../../../chart/groups'
 import type { NoteObject } from '../../../chart/note'
 import { pushState, state } from '../../../history'
@@ -41,6 +41,55 @@ const maxGeneratedNotes = 8000
 const text = ref('SEKAI')
 const fontFileName = ref<string>()
 const customFont = shallowRef<CustomStrokeFont>()
+    type SavedCustomFont = {
+    name: string
+    data: string
+}
+
+const savedFont = storageGet(
+    'utilities.asciiArt.customFont',
+    null,
+) as SavedCustomFont | null
+
+const encodeFont = async (file: File) => {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let binary = ''
+
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    }
+
+    return btoa(binary)
+}
+
+const decodeFont = (data: string) => {
+    const binary = atob(data)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+
+    return bytes.buffer
+}
+
+const restoreFont = async () => {
+    if (!savedFont || typeof savedFont.name !== 'string' || typeof savedFont.data !== 'string') {
+        return
+    }
+
+    isFontLoading.value = true
+
+    try {
+        const file = new File(
+            [decodeFont(savedFont.data)],
+            savedFont.name,
+        )
+
+        customFont.value = await loadCustomStrokeFont(file)
+        fontFileName.value = file.name
+    } catch {
+        storageRemove('utilities.asciiArt.customFont')
+    } finally {
+        isFontLoading.value = false
+    }
+}
 
 type AsciiArtSettings = {
     customFontMode: CustomFontMode
@@ -76,6 +125,7 @@ const isPreviewLoading = ref(false)
 const isFontLoading = ref(false)
 const isLoading = computed(() => isPreviewLoading.value || isFontLoading.value)
 const isGenerating = ref(false)
+    void restoreFont()
     watch(
     [customFontMode, startBeat, left, horizontalScale, verticalScale, strokeWidth, style],
     () => {
@@ -127,8 +177,19 @@ const loadFont = async (file: File) => {
     isFontLoading.value = true
 
     try {
-        customFont.value = await loadCustomStrokeFont(file)
+        const font = await loadCustomStrokeFont(file)
+
+        customFont.value = font
         fontFileName.value = file.name
+
+        try {
+            storageSet('utilities.asciiArt.customFont', {
+                name: file.name,
+                data: await encodeFont(file),
+            })
+        } catch {
+            // Font vẫn sử dụng được trong phiên hiện tại.
+        }
     } catch {
         error.value = i18n.value.utilities.asciiArt.fontInvalid
     } finally {
@@ -139,6 +200,7 @@ const loadFont = async (file: File) => {
 const clearFont = () => {
     customFont.value = undefined
     fontFileName.value = undefined
+    storageRemove('utilities.asciiArt.customFont')
     error.value = ''
 }
 
