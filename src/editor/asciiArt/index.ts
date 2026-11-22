@@ -123,6 +123,11 @@ export const getSelectedAsciiArtNotes = (entities: Entity[], groups: Groups, sto
 
 export type StrokePoint = readonly [x: number, y: number]
 
+export type StrokeAnchor = {
+    point: StrokePoint
+    size: number
+}
+
 export type StrokeText = {
     bounds: {
         minX: number
