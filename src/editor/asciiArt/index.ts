@@ -144,12 +144,14 @@ export type StrokePrimitive =
           type: 'slide'
           points: StrokePoint[]
           sizes?: number[]
-  }
+      }
     | {
           type: 'bar'
           y: number
           xMin: number
           xMax: number
+          sizeStart?: number
+          sizeEnd?: number
       }
 
 const horizontalBarThicknessPerLane = 0.25
@@ -442,20 +444,33 @@ export const decomposeStrokeText = ({
             if (!previous || !point) continue
 
             const deltaY = point[1] - previous[1]
-            const pointSize = sizes?.[i] ?? 1
+            const previousSize = sizes?.[i - 1]
+            const pointSize = sizes?.[i]
 
             if (Math.abs(deltaY) < 0.001) {
                 flushSlide()
+
+                const reversed = previous[0] > point[0]
 
                 primitives.push({
                     type: 'bar',
                     y: point[1],
                     xMin: Math.min(previous[0], point[0]),
                     xMax: Math.max(previous[0], point[0]),
+                    ...(sizes
+                        ? {
+                              sizeStart: reversed
+                                  ? pointSize ?? 1
+                                  : previousSize ?? 1,
+                              sizeEnd: reversed
+                                  ? previousSize ?? 1
+                                  : pointSize ?? 1,
+                          }
+                        : {}),
                 })
 
                 slide = [point]
-                slideSizes = sizes ? [pointSize] : []
+                slideSizes = sizes ? [pointSize ?? 1] : []
                 continue
             }
 
@@ -463,17 +478,20 @@ export const decomposeStrokeText = ({
 
             if (!slide.length) {
                 slide = [previous]
-                slideSizes = sizes ? [sizes[i - 1] ?? 1] : []
+                slideSizes = sizes ? [previousSize ?? 1] : []
             }
 
             if (direction && direction !== nextDirection) {
                 flushSlide()
                 slide = [previous]
-                slideSizes = sizes ? [sizes[i - 1] ?? 1] : []
+                slideSizes = sizes ? [previousSize ?? 1] : []
             }
 
             slide.push(point)
-            if (sizes) slideSizes.push(pointSize)
+
+            if (sizes) {
+                slideSizes.push(pointSize ?? 1)
+            }
 
             direction = nextDirection
         }
