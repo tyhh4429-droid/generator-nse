@@ -1,7 +1,7 @@
 import type { Font, PathCommand } from 'opentype.js'
 import type { StrokePoint } from '.'
 
-export type CustomFontMode = 'outline' | 'centerline'
+export type CustomFontMode = 'outline' | 'centerline' | 'filled'
 
 export type CustomStrokeFont = {
     key: string
@@ -57,10 +57,16 @@ export const customFontToPaths = (
     text: string,
     offsetY: number,
     mode: CustomFontMode,
-) =>
-    mode === 'outline'
-        ? customFontToOutlinePaths(font, text, offsetY)
-        : customFontToCenterlinePaths(font, text, offsetY)
+) => {
+    switch (mode) {
+        case 'outline':
+            return customFontToOutlinePaths(font, text, offsetY)
+        case 'filled':
+            return customFontToFilledPaths(font, text, offsetY)
+        default:
+            return customFontToCenterlinePaths(font, text, offsetY)
+    }
+}
 
 const customFontToOutlinePaths = (font: Font, text: string, offsetY: number) => {
     const paths: StrokePoint[][] = []
@@ -73,6 +79,67 @@ const customFontToOutlinePaths = (font: Font, text: string, offsetY: number) => 
         width: font.getAdvanceWidth(text, fontSize, { kerning: true }),
         paths,
     }
+}
+
+const customFontToFilledPaths = (font: Font, text: string, offsetY: number) => {
+    const width = font.getAdvanceWidth(text, fontSize, { kerning: true })
+    if (!text || width <= 0) return { width: Math.max(0, width), paths: [] }
+
+    const ascender = (font.ascender / font.unitsPerEm) * fontSize
+    const descender = (-font.descender / font.unitsPerEm) * fontSize
+    const canvas = document.createElement('canvas')
+
+    canvas.width = Math.max(1, Math.ceil((width + rasterPadding * 2) * rasterScale))
+    canvas.height = Math.max(
+        1,
+        Math.ceil((ascender + descender + rasterPadding * 2) * rasterScale),
+    )
+
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) throw new Error('Canvas is unavailable.')
+
+    const baseline = (rasterPadding + ascender) * rasterScale
+
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    font.draw(context, text, rasterPadding * rasterScale, baseline, fontSize * rasterScale, {
+        kerning: true,
+    })
+
+    const image = context.getImageData(0, 0, canvas.width, canvas.height)
+    const paths: StrokePoint[][] = []
+
+    for (let y = 0; y < canvas.height; y++) {
+        let start = -1
+
+        for (let x = 0; x <= canvas.width; x++) {
+            const index = x + y * canvas.width
+            const alpha = x < canvas.width ? (image.data[index * 4 + 3] ?? 0) : 0
+            const filled = alpha >= 128
+
+            if (filled && start === -1) {
+                start = x
+            }
+
+            if (!filled && start !== -1) {
+                if (x - start >= 2) {
+                    const pointY =
+                        offsetY + (baseline - (y + 0.5)) / rasterScale
+
+                    const startX = (start + 0.5) / rasterScale - rasterPadding
+                    const endX = (x - 0.5) / rasterScale - rasterPadding
+
+                    paths.push([
+                        [startX, pointY],
+                        [endX, pointY],
+                    ])
+                }
+
+                start = -1
+            }
+        }
+    }
+
+    return { width, paths }
 }
 
 const customFontToCenterlinePaths = (font: Font, text: string, offsetY: number) => {
