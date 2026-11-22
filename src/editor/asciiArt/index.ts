@@ -226,33 +226,74 @@ export const vectorizeStrokeText = async (
 ): Promise<StrokeText> => {
     const lines = normalizeStrokeText(value, !!customFont)
     const strokes: StrokePoint[][] = []
+    const strokeSizes: number[][] = []
+    let hasStrokeSizes = false
     let maxX = 0
 
     if (customFont) {
         for (const character of lines.join('')) {
-            if (!/\s/u.test(character) && customFont.font.charToGlyphIndex(character) === 0) {
-                throw new Error(`The selected font does not contain ${character}.`)
+            if (
+                !/\s/u.test(character) &&
+                customFont.font.charToGlyphIndex(character) === 0
+            ) {
+                throw new Error(
+                    `The selected font does not contain ${character}.`,
+                )
             }
         }
 
         for (const [lineIndex, line] of lines.entries()) {
-            const offsetY = (lines.length - 1 - lineIndex) * customFontLineHeight
-            const glyphs = customFontToPaths(customFont.font, line, offsetY, customFontMode)
+            const offsetY =
+                (lines.length - 1 - lineIndex) * customFontLineHeight
+
+            const glyphs = customFontToPaths(
+                customFont.font,
+                line,
+                offsetY,
+                customFontMode,
+            )
+
             strokes.push(...glyphs.paths)
+
+            if (glyphs.strokeSizes) {
+                strokeSizes.push(...glyphs.strokeSizes)
+                hasStrokeSizes = true
+            } else {
+                strokeSizes.push(
+                    ...glyphs.paths.map(() => []),
+                )
+            }
+
             maxX = Math.max(maxX, glyphs.width)
         }
 
-        return toStrokeText(lines, strokes, maxX, customFontLineHeight)
+        const result = toStrokeText(
+            lines,
+            strokes,
+            maxX,
+            customFontLineHeight,
+        )
+
+        if (hasStrokeSizes) {
+            result.strokeSizes = strokeSizes
+        }
+
+        return result
     }
 
     const cjkCharacters = new Set(
         lines.flatMap((line) =>
             Array.from(line).filter(
-                (character) => character !== '\u3000' && character.charCodeAt(0) > 126,
+                (character) =>
+                    character !== '\u3000' &&
+                    character.charCodeAt(0) > 126,
             ),
         ),
     )
-    await Promise.all(Array.from(cjkCharacters, characterToCjkPaths))
+
+    await Promise.all(
+        Array.from(cjkCharacters, characterToCjkPaths),
+    )
 
     for (const [lineIndex, line] of lines.entries()) {
         let cursorX = 0
@@ -263,7 +304,13 @@ export const vectorizeStrokeText = async (
 
             for (const path of glyph.paths) {
                 if (path.length < 2) continue
-                strokes.push(path.map(([x, y]) => [cursorX + x, offsetY + y]))
+
+                strokes.push(
+                    path.map(([x, y]) => [
+                        cursorX + x,
+                        offsetY + y,
+                    ]),
+                )
             }
 
             cursorX += glyph.width
