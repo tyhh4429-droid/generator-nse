@@ -739,6 +739,7 @@
             "fontMode": "Font Conversion",
             "fontOutline": "Outline",
             "fontCenterline": "Extract Centerline",
+            "fontFilled": "Filled",
             "startBeat": "Start Beat",
             "left": "Left Lane",
             "horizontalScale": "Horizontal Scale",
