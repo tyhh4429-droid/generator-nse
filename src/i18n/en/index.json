@@ -577,6 +577,7 @@
             "fontMode": "Font Conversion",
             "fontOutline": "Outline",
             "fontCenterline": "Extract Centerline",
+            "fontFilled": "Filled",
             "strokeWidth": "Stroke Width",
             "updateText": "Update Text",
             "left": "Left",
