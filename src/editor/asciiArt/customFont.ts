@@ -272,6 +272,99 @@ const customFontToFilledPaths = (
     return { width, paths, strokeSizes }
 }
 
+const simplifyPathWithSizes = (
+    points: StrokePoint[],
+    sizes: number[],
+    tolerance: number,
+    sizeTolerance: number,
+) => {
+    if (points.length <= 2) {
+        return { points, sizes }
+    }
+
+    const keep = new Uint8Array(points.length)
+    keep[0] = 1
+    keep[points.length - 1] = 1
+
+    const simplify = (start: number, end: number) => {
+        const first = points[start]
+        const last = points[end]
+
+        if (!first || !last) return
+
+        let maxError = 0
+        let maxIndex = -1
+
+        for (let i = start + 1; i < end; i++) {
+            const point = points[i]
+            if (!point) continue
+
+            const geometryError = pointToSegmentDistance(
+                point,
+                first,
+                last,
+            )
+
+            const dx = last[0] - first[0]
+            const dy = last[1] - first[1]
+            const lengthSquared = dx * dx + dy * dy
+
+            const t = lengthSquared > 0
+                ? Math.max(
+                      0,
+                      Math.min(
+                          1,
+                          ((point[0] - first[0]) * dx +
+                              (point[1] - first[1]) * dy) /
+                              lengthSquared,
+                      ),
+                  )
+                : 0
+
+            const expectedSize =
+                (sizes[start] ?? 0) * (1 - t) +
+                (sizes[end] ?? 0) * t
+
+            const sizeError = Math.abs(
+                (sizes[i] ?? 0) - expectedSize,
+            )
+
+            const error = Math.max(
+                geometryError / tolerance,
+                sizeError / sizeTolerance,
+            )
+
+            if (error > maxError) {
+                maxError = error
+                maxIndex = i
+            }
+        }
+
+        if (maxIndex !== -1 && maxError > 1) {
+            keep[maxIndex] = 1
+            simplify(start, maxIndex)
+            simplify(maxIndex, end)
+        }
+    }
+
+    simplify(0, points.length - 1)
+
+    const resultPoints: StrokePoint[] = []
+    const resultSizes: number[] = []
+
+    for (let i = 0; i < points.length; i++) {
+        if (!keep[i]) continue
+
+        resultPoints.push(points[i]!)
+        resultSizes.push(sizes[i] ?? 0.5)
+    }
+
+    return {
+        points: resultPoints,
+        sizes: resultSizes,
+    }
+}
+
 const customFontToCenterlinePaths = (font: Font, text: string, offsetY: number) => {
     const width = font.getAdvanceWidth(text, fontSize, { kerning: true })
     if (!text || width <= 0) return { width: Math.max(0, width), paths: [] }
