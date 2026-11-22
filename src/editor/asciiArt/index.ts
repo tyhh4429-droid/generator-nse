@@ -182,17 +182,33 @@ export const getGeneratedStrokeHeight = (
 ) =>
     Math.max(
         0,
-        ...primitives.map((primitive) =>
-            primitive.type === 'bar'
-                ? getHorizontalBarBeatRange(
-                      primitive.y,
-                      minY,
-                      maxY,
-                      verticalScale,
-                      horizontalBarThickness,
-                  )[1]
-                : (Math.max(...primitive.points.map(([, y]) => y)) - minY) * verticalScale,
-        ),
+        ...primitives.map((primitive) => {
+            if (primitive.type === 'bar') {
+                const thickness =
+                    primitive.sizeStart !== undefined
+                        ? Math.max(
+                              0.001,
+                              ((primitive.sizeStart +
+                                  (primitive.sizeEnd ?? primitive.sizeStart)) /
+                                  2) *
+                                  verticalScale,
+                          )
+                        : horizontalBarThickness
+
+                return getHorizontalBarBeatRange(
+                    primitive.y,
+                    minY,
+                    maxY,
+                    verticalScale,
+                    thickness,
+                )[1]
+            }
+
+            return (
+                (Math.max(...primitive.points.map(([, y]) => y)) - minY) *
+                verticalScale
+            )
+        }),
     )
 
 const lineHeight = 32
