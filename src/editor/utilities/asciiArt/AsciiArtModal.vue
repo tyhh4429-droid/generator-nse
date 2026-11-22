@@ -110,7 +110,11 @@ const getNumber = (value: unknown, fallback: number) =>
     typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
 const customFontMode = ref<CustomFontMode>(
-    savedSettings.customFontMode === 'centerline' ? 'centerline' : 'outline',
+    savedSettings.customFontMode === 'centerline'
+        ? 'centerline'
+        : savedSettings.customFontMode === 'filled'
+          ? 'filled'
+          : 'outline',
 )
 const startBeat = ref(getNumber(savedSettings.startBeat, 0))
 const left = ref(getNumber(savedSettings.left, -6.5))
@@ -374,13 +378,14 @@ const generate = async () => {
         </div>
 
         <SelectField
-            v-if="customFont"
-            v-model="customFontMode"
-            :label="i18n.utilities.asciiArt.fontMode"
-            :options="[
-                [i18n.utilities.asciiArt.fontOutline, 'outline'],
-                [i18n.utilities.asciiArt.fontCenterline, 'centerline'],
-            ]"
+          v-if="customFont"
+          v-model="customFontMode"
+          :label="i18n.utilities.asciiArt.fontMode"
+          :options="[
+            [i18n.utilities.asciiArt.fontOutline, 'outline'],
+            [i18n.utilities.asciiArt.fontCenterline, 'centerline'],
+            ['Filled', 'filled'],
+          ]"
         />
 
         <div class="grid grid-cols-2 gap-2">
