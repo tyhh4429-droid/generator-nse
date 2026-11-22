@@ -7,6 +7,7 @@ Features added:
   + Now keeps the value after generating, not the text.
 - Image Art Generator:
   + Same goes with the Stroke Text Generator, does not keeps the image after generating.
+  + This forked version doesn't crop the empty pixel
 
 Unfinished
 
