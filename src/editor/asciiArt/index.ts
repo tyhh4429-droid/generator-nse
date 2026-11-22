@@ -136,13 +136,15 @@ export type StrokeText = {
         maxY: number
     }
     strokes: StrokePoint[][]
+    strokeSizes?: number[][]
 }
 
 export type StrokePrimitive =
     | {
           type: 'slide'
           points: StrokePoint[]
-      }
+          sizes?: number[]
+  }
     | {
           type: 'bar'
           y: number
@@ -346,26 +348,44 @@ const getGlyph = async (character: string) => {
     return characterToCjkPaths(character)
 }
 
-export const decomposeStrokeText = ({ strokes }: StrokeText): StrokePrimitive[] => {
+export const decomposeStrokeText = ({
+    strokes,
+    strokeSizes,
+}: StrokeText): StrokePrimitive[] => {
     const primitives: StrokePrimitive[] = []
 
-    for (const stroke of strokes) {
+    for (const [strokeIndex, stroke] of strokes.entries()) {
         const firstPoint = stroke[0]
         if (!firstPoint) continue
 
+        const sizes = strokeSizes?.[strokeIndex]
+
         let slide: StrokePoint[] = [firstPoint]
+        let slideSizes: number[] = sizes ? [sizes[0] ?? 1] : []
         let direction = 0
 
         const flushSlide = () => {
             const first = slide[0]
             const last = slide.at(-1)
+
             if (slide.length >= 2 && first && last) {
+                const reversed = first[1] > last[1]
+
                 primitives.push({
                     type: 'slide',
-                    points: first[1] <= last[1] ? slide : [...slide].reverse(),
+                    points: reversed ? [...slide].reverse() : [...slide],
+                    ...(sizes
+                        ? {
+                              sizes: reversed
+                                  ? [...slideSizes].reverse()
+                                  : [...slideSizes],
+                          }
+                        : {}),
                 })
             }
+
             slide = []
+            slideSizes = []
             direction = 0
         }
 
@@ -375,28 +395,39 @@ export const decomposeStrokeText = ({ strokes }: StrokeText): StrokePrimitive[] 
             if (!previous || !point) continue
 
             const deltaY = point[1] - previous[1]
+            const pointSize = sizes?.[i] ?? 1
 
             if (Math.abs(deltaY) < 0.001) {
                 flushSlide()
+
                 primitives.push({
                     type: 'bar',
                     y: point[1],
                     xMin: Math.min(previous[0], point[0]),
                     xMax: Math.max(previous[0], point[0]),
                 })
+
                 slide = [point]
+                slideSizes = sizes ? [pointSize] : []
                 continue
             }
 
             const nextDirection = Math.sign(deltaY)
-            if (!slide.length) slide = [previous]
+
+            if (!slide.length) {
+                slide = [previous]
+                slideSizes = sizes ? [sizes[i - 1] ?? 1] : []
+            }
 
             if (direction && direction !== nextDirection) {
                 flushSlide()
                 slide = [previous]
+                slideSizes = sizes ? [sizes[i - 1] ?? 1] : []
             }
 
             slide.push(point)
+            if (sizes) slideSizes.push(pointSize)
+
             direction = nextDirection
         }
 
