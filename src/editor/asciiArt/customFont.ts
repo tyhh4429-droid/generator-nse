@@ -107,6 +107,7 @@ const customFontToFilledPaths = (font: Font, text: string, offsetY: number) => {
 
     const image = context.getImageData(0, 0, canvas.width, canvas.height)
     const paths: StrokePoint[][] = []
+    const activePaths = new Map<string, StrokePoint[]>()
 
     for (let y = 0; y < canvas.height; y++) {
         let start = -1
