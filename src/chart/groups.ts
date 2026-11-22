@@ -7,7 +7,7 @@ export type TextArtGroupData = {
     text: string
     fontName?: string
     fontKey?: string
-    fontMode: 'outline' | 'centerline'
+    fontMode: 'outline' | 'centerline' | 'filled'
     horizontalScale: number
     verticalScale: number
     strokeWidth: number
@@ -34,7 +34,7 @@ export const parseTextArtGroupData = (value: string | undefined): TextArtGroupDa
         if (
             data.version !== 1 ||
             typeof data.text !== 'string' ||
-            (data.fontMode !== 'outline' && data.fontMode !== 'centerline') ||
+            (data.fontMode !== 'outline' && data.fontMode !== 'centerline' && data.fontMode !== 'filled') ||
             !isFinitePositive(data.horizontalScale) ||
             !isFinitePositive(data.verticalScale) ||
             !isFinitePositive(data.strokeWidth) ||
