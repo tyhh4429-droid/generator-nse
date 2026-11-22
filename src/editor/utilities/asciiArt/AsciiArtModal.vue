@@ -163,12 +163,15 @@ watch(
         try {
             const result = await vectorizeStrokeText(value, font, fontMode)
             if (request === previewRequest) art.value = result
-        } catch {
+        } catch (err) {
             if (request !== previewRequest) return
+
+            console.error('[AsciiArt] Preview failed:', err)
+
             art.value = emptyArt()
-            error.value = font
-                ? i18n.value.utilities.asciiArt.fontMissingGlyph
-                : i18n.value.utilities.asciiArt.invalid
+            error.value = err instanceof Error
+                ? err.message
+                : String(err)
         } finally {
             if (request === previewRequest) isPreviewLoading.value = false
         }
