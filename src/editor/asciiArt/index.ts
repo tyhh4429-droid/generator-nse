@@ -424,14 +424,6 @@ export const decomposeStrokeText = ({
         if (!firstPoint) continue
 
         const sizes = strokeSizes?.[strokeIndex]
-        if (sizes?.length) {
-            primitives.push({
-                type: 'slide',
-                points: [...stroke],
-                sizes: [...sizes],
-            })
-            continue
-        }
 
         let slide: StrokePoint[] = [firstPoint]
         let slideSizes: number[] = sizes ? [sizes[0] ?? 1] : []
