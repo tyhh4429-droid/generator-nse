@@ -316,12 +316,20 @@ const generate = async () => {
             const x = (stroke.xMin + stroke.xMax) / 2
             const head = toNote(x, stroke.y, size, 'anchor')
             const tail = toNote(x, stroke.y, size, 'anchor')
+            const barThickness = stroke.sizeStart !== undefined
+                ? Math.max(
+                    0.5,
+                    ((stroke.sizeStart + (stroke.sizeEnd ?? stroke.sizeStart)) / 2) *
+                        verticalScale.value,
+                )
+              : horizontalBarThickness
+
             const [headOffset, tailOffset] = getHorizontalBarBeatRange(
                 stroke.y,
                 strokeText.bounds.minY,
                 strokeText.bounds.maxY,
                 verticalScale.value,
-                horizontalBarThickness,
+                barThickness,
             )
             head.beat = startBeat.value + headOffset
             tail.beat = startBeat.value + tailOffset
