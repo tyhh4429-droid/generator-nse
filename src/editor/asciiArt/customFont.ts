@@ -121,7 +121,7 @@ const customFontToFilledPaths = (font: Font, text: string, offsetY: number) => {
             }
 
             if (!filled && start !== -1) {
-                if (x - start >= 2) {
+                if (x - start >= 1) {
                     const pointY =
                         offsetY + (baseline - (y + 0.5)) / rasterScale
 
