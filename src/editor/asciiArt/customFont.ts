@@ -107,60 +107,37 @@ const customFontToFilledPaths = (font: Font, text: string, offsetY: number) => {
 
     const image = context.getImageData(0, 0, canvas.width, canvas.height)
     const paths: StrokePoint[][] = []
-    const activePaths = new Map<string, StrokePoint[]>()
 
-    for (let y = 0; y < canvas.height; y++) {
-       const segments: { start: number; end: number }[] = []
-       let start = -1
+for (let y = 0; y < canvas.height; y++) {
+    let start = -1
 
-       for (let x = 0; x <= canvas.width; x++) {
-          const index = x + y * canvas.width
-          const alpha = x < canvas.width ? (image.data[index * 4 + 3] ?? 0) : 0
-          const filled = alpha >= 128
+    for (let x = 0; x <= canvas.width; x++) {
+        const index = x + y * canvas.width
+        const alpha = x < canvas.width ? (image.data[index * 4 + 3] ?? 0) : 0
+        const filled = alpha >= 128
 
-       if (filled && start === -1) {
-          start = x
-       }
+        if (filled && start === -1) {
+            start = x
+        }
 
-       if (!filled && start !== -1) {
-          if (x - start >= 1) segments.push({ start, end: x - 1 })
-          start = -1
-       }
-    }
+        if (!filled && start !== -1) {
+            if (x - start >= 1) {
+                const pointY =
+                    offsetY + (baseline - (y + 0.5)) / rasterScale
 
-    const nextPaths = new Map<string, StrokePoint[]>()
-    const pointY = offsetY + (baseline - (y + 0.5)) / rasterScale
+                const startX = (start + 0.5) / rasterScale - rasterPadding
+                const endX = (x - 0.5) / rasterScale - rasterPadding
 
-    for (const segment of segments) {
-        const key = `${segment.start}:${segment.end}`
-        const path = activePaths.get(key)
+                paths.push([
+                    [startX, pointY],
+                    [endX, pointY],
+                ])
+            }
 
-        const startX = (segment.start + 0.5) / rasterScale - rasterPadding
-        const endX = (segment.end + 0.5) / rasterScale - rasterPadding
-
-        if (path) {
-            path.push([startX, pointY], [endX, pointY])
-            nextPaths.set(key, path)
-        } else {
-            nextPaths.set(key, [
-                [startX, pointY],
-                [endX, pointY],
-            ])
+            start = -1
         }
     }
-
-    for (const [key, path] of activePaths) {
-        if (!nextPaths.has(key)) paths.push(path)
-    }
-
-    activePaths.clear()
-    for (const [key, path] of nextPaths) {
-        activePaths.set(key, path)
-    }
 }
-
-paths.push(...activePaths.values())
-
 return { width, paths }
 }
 
