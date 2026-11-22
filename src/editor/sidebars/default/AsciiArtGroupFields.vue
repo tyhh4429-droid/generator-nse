@@ -374,13 +374,14 @@ const height = computed({
                 @select="loadFont"
             />
             <SelectField
-                v-if="textArt.fontName || customFont"
-                v-model="fontMode"
-                :label="i18n.sidebars.asciiArt.fontMode"
-                :options="[
-                    [i18n.sidebars.asciiArt.fontOutline, 'outline'],
-                    [i18n.sidebars.asciiArt.fontCenterline, 'centerline'],
-                ]"
+              v-if="textArt.fontName || customFont"
+              v-model="fontMode"
+              :label="i18n.sidebars.asciiArt.fontMode"
+              :options="[
+                [i18n.sidebars.asciiArt.fontOutline, 'outline'],
+                [i18n.sidebars.asciiArt.fontCenterline, 'centerline'],
+                ['Filled', 'filled'],
+              ]"
             />
             <NumberField
                 v-model="strokeWidth"
