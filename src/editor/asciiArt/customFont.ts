@@ -81,64 +81,195 @@ const customFontToOutlinePaths = (font: Font, text: string, offsetY: number) => 
     }
 }
 
-const customFontToFilledPaths = (font: Font, text: string, offsetY: number) => {
+const customFontToFilledPaths = (
+    font: Font,
+    text: string,
+    offsetY: number,
+) => {
     const width = font.getAdvanceWidth(text, fontSize, { kerning: true })
-    if (!text || width <= 0) return { width: Math.max(0, width), paths: [] }
+
+    if (!text || width <= 0) {
+        return {
+            width: Math.max(0, width),
+            paths: [] as StrokePoint[][],
+            strokeSizes: [] as number[][],
+        }
+    }
 
     const ascender = (font.ascender / font.unitsPerEm) * fontSize
     const descender = (-font.descender / font.unitsPerEm) * fontSize
     const canvas = document.createElement('canvas')
 
-    canvas.width = Math.max(1, Math.ceil((width + rasterPadding * 2) * rasterScale))
+    canvas.width = Math.max(
+        1,
+        Math.ceil((width + rasterPadding * 2) * rasterScale),
+    )
     canvas.height = Math.max(
         1,
         Math.ceil((ascender + descender + rasterPadding * 2) * rasterScale),
     )
 
-    const context = canvas.getContext('2d', { willReadFrequently: true })
+    const context = canvas.getContext('2d', {
+        willReadFrequently: true,
+    })
+
     if (!context) throw new Error('Canvas is unavailable.')
 
     const baseline = (rasterPadding + ascender) * rasterScale
 
     context.clearRect(0, 0, canvas.width, canvas.height)
-    font.draw(context, text, rasterPadding * rasterScale, baseline, fontSize * rasterScale, {
-        kerning: true,
-    })
 
-    const image = context.getImageData(0, 0, canvas.width, canvas.height)
-    const paths: StrokePoint[][] = []
+    font.draw(
+        context,
+        text,
+        rasterPadding * rasterScale,
+        baseline,
+        fontSize * rasterScale,
+        { kerning: true },
+    )
 
-for (let y = 0; y < canvas.height; y++) {
-    let start = -1
+    const image = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+    )
 
-    for (let x = 0; x <= canvas.width; x++) {
-        const index = x + y * canvas.width
-        const alpha = x < canvas.width ? (image.data[index * 4 + 3] ?? 0) : 0
-        const filled = alpha >= 128
+    const bitmap = new Uint8Array(canvas.width * canvas.height)
 
-        if (filled && start === -1) {
-            start = x
-        }
+    for (let i = 0; i < bitmap.length; i++) {
+        bitmap[i] = (image.data[i * 4 + 3] ?? 0) >= 128 ? 1 : 0
+    }
 
-        if (!filled && start !== -1) {
-            if (x - start >= 1) {
-                const pointY =
-                    offsetY + (baseline - (y + 0.5)) / rasterScale
+    // Calculate the distance from each pixel inside the character to the character's border.
+    const distance = new Float32Array(bitmap.length)
+    const diagonal = Math.SQRT2
+    const infinity = canvas.width + canvas.height
 
-                const startX = (start + 0.5) / rasterScale - rasterPadding
-                const endX = (x - 0.5) / rasterScale - rasterPadding
+    for (let i = 0; i < bitmap.length; i++) {
+        distance[i] = bitmap[i] ? infinity : 0
+    }
 
-                paths.push([
-                    [startX, pointY],
-                    [endX, pointY],
-                ])
+    const indexOf = (x: number, y: number) =>
+        x + y * canvas.width
+
+    // Scan from top to bottom.
+    for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+            const index = indexOf(x, y)
+            if (!bitmap[index]) continue
+
+            let value = distance[index] ?? infinity
+
+            if (x > 0) {
+                value = Math.min(value, (distance[index - 1] ?? infinity) + 1)
             }
 
-            start = -1
+            if (y > 0) {
+                value = Math.min(value, (distance[index - canvas.width] ?? infinity) + 1)
+
+                if (x > 0) {
+                    value = Math.min(
+                        value,
+                        (distance[index - canvas.width - 1] ?? infinity) + diagonal,
+                    )
+                }
+
+                if (x < canvas.width - 1) {
+                    value = Math.min(
+                        value,
+                        (distance[index - canvas.width + 1] ?? infinity) + diagonal,
+                    )
+                }
+            }
+
+            distance[index] = value
         }
     }
-}
-return { width, paths }
+
+    // The scan proceeds from bottom to top.
+    for (let y = canvas.height - 1; y >= 0; y--) {
+        for (let x = canvas.width - 1; x >= 0; x--) {
+            const index = indexOf(x, y)
+            if (!bitmap[index]) continue
+
+            let value = distance[index] ?? infinity
+
+            if (x < canvas.width - 1) {
+                value = Math.min(value, (distance[index + 1] ?? infinity) + 1)
+            }
+
+            if (y < canvas.height - 1) {
+                value = Math.min(value, (distance[index + canvas.width] ?? infinity) + 1)
+
+                if (x > 0) {
+                    value = Math.min(
+                        value,
+                        (distance[index + canvas.width - 1] ?? infinity) + diagonal,
+                    )
+                }
+
+                if (x < canvas.width - 1) {
+                    value = Math.min(
+                        value,
+                        (distance[index + canvas.width + 1] ?? infinity) + diagonal,
+                    )
+                }
+            }
+
+            distance[index] = value
+        }
+    }
+
+    // Create the skeleton and trace every detail.
+    thinBitmap(bitmap, canvas.width, canvas.height)
+
+    const skeletonPaths = traceSkeleton(
+        bitmap,
+        canvas.width,
+        canvas.height,
+    )
+
+    const paths: StrokePoint[][] = []
+    const strokeSizes: number[][] = []
+
+    for (const skeleton of skeletonPaths) {
+        const points: StrokePoint[] = []
+        const sizes: number[] = []
+
+        for (const [x, y] of skeleton) {
+            const index = indexOf(
+                Math.round(x),
+                Math.round(y),
+            )
+
+            const radius = distance[index] ?? 0
+
+            points.push([
+                (x + 0.5) / rasterScale - rasterPadding,
+                offsetY + (baseline - (y + 0.5)) / rasterScale,
+            ])
+
+            // Estimated diameter, converted from pixels to font units.
+            sizes.push(Math.max(0.5, (radius * 2) / rasterScale))
+        }
+
+        if (points.length < 2) continue
+
+        const simplified = simplifyPathWithSizes(
+            points,
+            sizes,
+            simplifyTolerance,
+            0.5,
+        )
+
+        if (simplified.points.length < 2) continue
+
+        paths.push(simplified.points)
+        strokeSizes.push(simplified.sizes)
+    }
+
+    return { width, paths, strokeSizes }
 }
 
 const customFontToCenterlinePaths = (font: Font, text: string, offsetY: number) => {
