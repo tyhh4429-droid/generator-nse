@@ -605,12 +605,32 @@ const traceSkeleton = (bitmap: Uint8Array, width: number, height: number) => {
     const getNeighbors = (index: number) => {
         const x = index % width
         const y = Math.floor(index / width)
+
         return neighbors.flatMap(([offsetX, offsetY]) => {
             const nextX = x + offsetX
             const nextY = y + offsetY
-            if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) return []
+
+            if (
+                nextX < 0 ||
+                nextX >= width ||
+                nextY < 0 ||
+                nextY >= height
+            ) {
+                return []
+            }
+
             const next = nextX + nextY * width
-            return bitmap[next] ? [next] : []
+            if (!bitmap[next]) return []
+
+        // Remove the crossover connection if a horizontal or vertical connection already exists.
+            if (offsetX !== 0 && offsetY !== 0) {
+                const horizontal = bitmap[y * width + nextX]
+                const vertical = bitmap[nextY * width + x]
+
+                if (horizontal || vertical) return []
+            }
+
+            return [next]
         })
     }
     const edgeKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`)
