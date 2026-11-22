@@ -329,9 +329,19 @@ const generate = async () => {
             return [...addNote(transaction, slideId, head), ...addNote(transaction, slideId, tail)]
         }
 
-        return stroke.points.flatMap(([x, y]) =>
-            addNote(transaction, slideId, toNote(x, y, strokeWidth.value, 'anchor')),
-        )
+        return stroke.points.flatMap(([x, y], index) => {
+            const filledSize = stroke.sizes?.[index]
+
+            const size = filledSize !== undefined
+                ? Math.max(strokeWidth.value, filledSize * horizontalScale.value)
+                : strokeWidth.value
+
+            return addNote(
+                transaction,
+                slideId,
+                toNote(x, y, size, 'anchor'),
+            )
+        })
     })
 
     const message = interpolateRaw(i18n.value.utilities.asciiArt.generated, `${strokes.length}`)
