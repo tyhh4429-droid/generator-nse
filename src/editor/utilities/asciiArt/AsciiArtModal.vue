@@ -229,7 +229,9 @@ const generate = async () => {
     let strokeText: StrokeText
     try {
         strokeText = await vectorizeStrokeText(text.value, customFont.value, customFontMode.value)
-    } catch {
+    } catch (err) {
+        console.error('[AsciiArt] Generate failed:', err)
+        
         error.value = customFont.value
             ? i18n.value.utilities.asciiArt.fontMissingGlyph
             : i18n.value.utilities.asciiArt.invalid
