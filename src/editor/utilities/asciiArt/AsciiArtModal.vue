@@ -384,7 +384,7 @@ const generate = async () => {
           :options="[
             [i18n.utilities.asciiArt.fontOutline, 'outline'],
             [i18n.utilities.asciiArt.fontCenterline, 'centerline'],
-            ['Filled', 'filled'],
+            [i18n.utilities.asciiArt.fontFilled, 'filled'],
           ]"
         />
 
