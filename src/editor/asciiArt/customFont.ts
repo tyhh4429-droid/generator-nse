@@ -60,11 +60,19 @@ export const customFontToPaths = (
 ) => {
     switch (mode) {
         case 'outline':
-            return customFontToOutlinePaths(font, text, offsetY)
+            return {
+                ...customFontToOutlinePaths(font, text, offsetY),
+                strokeSizes: undefined,
+            }
+
         case 'filled':
             return customFontToFilledPaths(font, text, offsetY)
+
         default:
-            return customFontToCenterlinePaths(font, text, offsetY)
+            return {
+                ...customFontToCenterlinePaths(font, text, offsetY),
+                strokeSizes: undefined,
+            }
     }
 }
 
