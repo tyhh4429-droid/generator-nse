@@ -245,20 +245,18 @@ const customFontToFilledPaths = (
         const points: StrokePoint[] = []
         const sizes: number[] = []
 
-        for (const [x, y] of skeleton) {
-            const index = indexOf(
-                Math.round(x),
-                Math.round(y),
-            )
+        
+        for (const pointIndex of skeleton) {
+            const x = pointIndex % canvas.width
+            const y = Math.floor(pointIndex / canvas.width)
 
-            const radius = distance[index] ?? 0
+            const radius = distance[pointIndex] ?? 0
 
             points.push([
                 (x + 0.5) / rasterScale - rasterPadding,
                 offsetY + (baseline - (y + 0.5)) / rasterScale,
             ])
 
-            // Estimated diameter, converted from pixels to font units.
             sizes.push(Math.max(0.5, (radius * 2) / rasterScale))
         }
 
