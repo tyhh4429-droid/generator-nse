@@ -13,7 +13,7 @@ const customFonts = new Map<string, CustomStrokeFont>()
 
 const fontSize = 28
 const lineHeight = 32
-const rasterScale = 3
+const rasterScale = 2
 const rasterPadding = 3
 const simplifyTolerance = 0.45
 
